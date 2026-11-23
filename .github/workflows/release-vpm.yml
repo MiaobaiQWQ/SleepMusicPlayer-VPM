@@ -55,4 +55,5 @@ jobs:
 
       - name: Deploy VPM Listing to GitHub Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
