@@ -39,6 +39,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private const string KeySlotFull = "\"slot\"";
     private const string KeyTime = "\"time\"";
     private const string KeyText = "\"text\"";
+    private const string KeyWords = "\"words\"";
 
     private const string PathSlotMarker = "/s/";
     private const string PathDirectMarker = "/v4/vrc";
@@ -157,6 +158,20 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private float[] _transTimes = new float[0];
     private string[] _transTexts = new string[0];
 
+    // 逐字时间轴扁平缓存（兼容 YRC / KRC 的 words: [[offsetMs, durMs, len], ...]）
+    private bool _hasWordTimings;
+    private int[] _wordStartIdx = new int[0];
+    private int[] _wordCounts = new int[0];
+    private float[] _wordOffsets = new float[0];
+    private float[] _wordDurs = new float[0];
+    private int[] _wordLens = new int[0];
+    private int _wordTotalCount;
+
+    // 当前高亮句的预计算字宽归一化区间（切行时计算一次，每帧零分配）
+    private float[] _activeWordStartU = new float[128];
+    private float[] _activeWordEndU = new float[128];
+    private int _activeWordCount;
+
     // 切行与动画状态
     private int _currentLineIdx = -2;
     private float _flipProgress = 1f;
@@ -166,6 +181,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private float[] _parseTimes;
     private string[] _parseTexts;
     private int _parseCount;
+    private int[] _parseWordStarts;
+    private int[] _parseWordCounts;
+    private float[] _parseWordOffsets;
+    private float[] _parseWordDurs;
+    private int[] _parseWordLens;
+    private int _parseWordTotal;
 
     #endregion
 
@@ -390,7 +411,8 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             "网络耗时 " + FormatMs(fetchMs) +
             " | 解析耗时 " + FormatMs(parseMs) +
             " | 歌名: " + _songName +
-            " | 歌词 " + _lyricCount + " 行 / 翻译 " + _transCount + " 行");
+            " | 歌词 " + _lyricCount + " 行 / 翻译 " + _transCount + " 行" +
+            " | 逐字模式: " + (_hasWordTimings ? "真逐字 (YRC/KRC)" : "智能拟真 (LRC)"));
 
         UpdateLyrics(vvmwCore != null ? vvmwCore.Time : 0f);
     }
@@ -577,8 +599,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         float renderMs = ElapsedMs(renderStart);
 
-        // 根据本句字宽更新 GPU 上色宽度参数并记录上色设置耗时
+        // 根据本句字宽与逐字区间更新 GPU 上色参数并记录提交耗时
         float colorStart = Time.realtimeSinceStartup;
+        BuildActiveLineWordLayout(idx, currentLine);
         if (activeLyricGpuMat != null)
         {
             activeLyricGpuMat.SetFloat(PropFlipFade, 0f);
@@ -591,6 +614,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             float vocalSpan = ComputeVocalSpan(idx);
             LogInfo("歌词渲染",
                 "第 " + (idx + 1) + "/" + _lyricCount + " 句" +
+                " | 模式: " + (_activeWordCount > 0 ? "真逐字(" + _activeWordCount + "词)" : "拟真") +
                 " | 渲染耗时 " + FormatMs(renderMs) +
                 " | 上色提交 " + FormatMs(colorMs) +
                 " | 预计上色 " + vocalSpan.ToString("F2") + " s" +
@@ -598,7 +622,46 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
     }
 
-    // 更新当前句的逐字金色扫光进度并在完成时输出日志
+    // 预计算当前句每个词元在水平方向上的像素归一化起止点 (0..1)
+    private void BuildActiveLineWordLayout(int idx, string text)
+    {
+        _activeWordCount = 0;
+        if (idx < 0 || idx >= _wordCounts.Length || string.IsNullOrEmpty(text)) return;
+        int wCount = _wordCounts[idx];
+        if (wCount <= 0) return;
+
+        int wStart = _wordStartIdx[idx];
+        if (wCount > _activeWordStartU.Length)
+        {
+            _activeWordStartU = new float[wCount];
+            _activeWordEndU = new float[wCount];
+        }
+
+        float totalPx = 0f;
+        for (int ci = 0; ci < text.Length; ci++) totalPx += text[ci] > 127 ? 56f : 28f;
+        if (totalPx < 1f) totalPx = 1f;
+
+        int charCursor = 0;
+        float accPx = 0f;
+        for (int k = 0; k < wCount; k++)
+        {
+            int len = _wordLens[wStart + k];
+            if (len < 1) len = 1;
+            float wPx = 0f;
+            for (int c = 0; c < len && charCursor < text.Length; c++)
+            {
+                wPx += text[charCursor] > 127 ? 56f : 28f;
+                charCursor++;
+            }
+            _activeWordStartU[k] = Mathf.Clamp01(accPx / totalPx);
+            accPx += wPx;
+            _activeWordEndU[k] = Mathf.Clamp01(accPx / totalPx);
+        }
+        if (wCount > 0) _activeWordEndU[wCount - 1] = 1f;
+        _activeWordCount = wCount;
+    }
+
+    // 更新当前句的逐字金色扫光进度（优先按真逐字时间轴卡点，无逐字数据时平滑拟真）
     private void UpdateKaraokeSweep(int idx, float effectiveTime)
     {
         if (activeLyricGpuMat == null) return;
@@ -606,9 +669,18 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         float sweep = 0f;
         if (idx >= 0 && idx < _lyricCount)
         {
-            float t0 = _lyricTimes[idx];
-            float vocalSpan = ComputeVocalSpan(idx);
-            sweep = Mathf.Clamp01((effectiveTime - t0) / vocalSpan);
+            float relSec = effectiveTime - _lyricTimes[idx];
+            if (_activeWordCount > 0 && idx < _wordStartIdx.Length)
+            {
+                sweep = EvaluateWordSweep(idx, relSec);
+            }
+            else
+            {
+                float vocalSpan = ComputeVocalSpan(idx);
+                float rawT = Mathf.Clamp01(relSec / vocalSpan);
+                // 无逐字时间轴时做轻微尾音缓出，比纯线性匀速更贴合真实唱感
+                sweep = Mathf.Clamp01(rawT * (1.14f - 0.14f * rawT));
+            }
 
             if (sweep >= 0.999f && !_lineSweepFinishedLogged)
             {
@@ -619,6 +691,29 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
 
         activeLyricGpuMat.SetFloat(PropSweep, sweep);
+    }
+
+    // 根据 YRC/KRC 逐字时间轴精确计算当前水平扫光坐标（停顿换气时自然停住）
+    private float EvaluateWordSweep(int lineIdx, float relSec)
+    {
+        int wStart = _wordStartIdx[lineIdx];
+        if (relSec <= _wordOffsets[wStart]) return 0f;
+
+        float lastEndU = 0f;
+        for (int k = 0; k < _activeWordCount; k++)
+        {
+            int wi = wStart + k;
+            float ws = _wordOffsets[wi];
+            float wd = _wordDurs[wi];
+            if (relSec < ws) return lastEndU;
+            if (relSec <= ws + wd)
+            {
+                float frac = Mathf.Clamp01((relSec - ws) / Mathf.Max(0.02f, wd));
+                return Mathf.Lerp(_activeWordStartU[k], _activeWordEndU[k], frac);
+            }
+            lastEndU = _activeWordEndU[k];
+        }
+        return 1f;
     }
 
     // 平滑推进切行上浮渐显动画
@@ -818,22 +913,33 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         int lStart = FindArrayStart(json, KeyLyrics);
         if (lStart >= 0)
         {
-            ParseLyricArray(json, lStart);
+            ParseLyricArray(json, lStart, true);
             _lyricTimes = _parseTimes;
             _lyricTexts = _parseTexts;
             _lyricCount = _parseCount;
+            _wordStartIdx = _parseWordStarts;
+            _wordCounts = _parseWordCounts;
+            _wordOffsets = _parseWordOffsets;
+            _wordDurs = _parseWordDurs;
+            _wordLens = _parseWordLens;
+            _wordTotalCount = _parseWordTotal;
+            _hasWordTimings = _wordTotalCount > 0;
         }
         else
         {
             _lyricTimes = new float[0];
             _lyricTexts = new string[0];
             _lyricCount = 0;
+            _wordStartIdx = new int[0];
+            _wordCounts = new int[0];
+            _wordTotalCount = 0;
+            _hasWordTimings = false;
         }
 
         int tStart = FindArrayStart(json, KeyTransLyrics);
         if (tStart >= 0)
         {
-            ParseLyricArray(json, tStart);
+            ParseLyricArray(json, tStart, false);
             _transTimes = _parseTimes;
             _transTexts = _parseTexts;
             _transCount = _parseCount;
@@ -855,11 +961,21 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
     }
 
-    private void ParseLyricArray(string json, int arrayStart)
+    private void ParseLyricArray(string json, int arrayStart, bool parseWords)
     {
         _parseTimes = new float[128];
         _parseTexts = new string[128];
+        _parseWordStarts = new int[128];
+        _parseWordCounts = new int[128];
         _parseCount = 0;
+
+        if (parseWords)
+        {
+            _parseWordOffsets = new float[512];
+            _parseWordDurs = new float[512];
+            _parseWordLens = new int[512];
+            _parseWordTotal = 0;
+        }
 
         int i = arrayStart + 1;
         int len = json.Length;
@@ -879,7 +995,17 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
                         int next;
                         float tm = ParseNumberAt(json, tPos, out next);
                         string tx = ParseStringAt(json, sPos, out next);
-                        AppendParsedLine(tm, tx);
+                        int wStart = _parseWordTotal;
+                        int wCount = 0;
+                        if (parseWords)
+                        {
+                            int wPos = FindKeyStart(json, i, end, KeyWords);
+                            if (wPos >= 0 && json[wPos] == '[')
+                            {
+                                wCount = ParseWordArray(json, wPos, end);
+                            }
+                        }
+                        AppendParsedLine(tm, tx, wStart, wCount);
                     }
                     i = end + 1;
                     continue;
@@ -889,23 +1015,95 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
     }
 
-    private void AppendParsedLine(float timeSec, string text)
+    // 解析单句的 words: [[offsetMs, durMs, charLen], ...] 逐字数组
+    private int ParseWordArray(string json, int startBracket, int objEnd)
+    {
+        int count = 0;
+        int i = startBracket + 1;
+        while (i < objEnd)
+        {
+            char c = json[i];
+            if (c == ']') break;
+            if (c == '[')
+            {
+                i++;
+                int next;
+                while (i < objEnd && (json[i] == ' ' || json[i] == '\t' || json[i] == '\r' || json[i] == '\n')) i++;
+                float offMs = ParseNumberAt(json, i, out next);
+                i = next;
+                while (i < objEnd && (json[i] == ',' || json[i] == ' ' || json[i] == '\t')) i++;
+                float durMs = ParseNumberAt(json, i, out next);
+                i = next;
+                int charLen = 1;
+                while (i < objEnd && (json[i] == ' ' || json[i] == '\t')) i++;
+                if (i < objEnd && json[i] == ',')
+                {
+                    i++;
+                    while (i < objEnd && (json[i] == ' ' || json[i] == '\t')) i++;
+                    charLen = Mathf.Max(1, Mathf.RoundToInt(ParseNumberAt(json, i, out next)));
+                    i = next;
+                }
+                while (i < objEnd && json[i] != ']') i++;
+                if (i < objEnd && json[i] == ']') i++;
+
+                AppendParsedWord(offMs * 0.001f, Mathf.Max(0.02f, durMs * 0.001f), charLen);
+                count++;
+                continue;
+            }
+            i++;
+        }
+        return count;
+    }
+
+    private void AppendParsedWord(float offsetSec, float durSec, int charLen)
+    {
+        if (_parseWordTotal >= _parseWordOffsets.Length)
+        {
+            int nextSize = _parseWordOffsets.Length * 2;
+            float[] nOff = new float[nextSize];
+            float[] nDur = new float[nextSize];
+            int[] nLen = new int[nextSize];
+            for (int k = 0; k < _parseWordTotal; k++)
+            {
+                nOff[k] = _parseWordOffsets[k];
+                nDur[k] = _parseWordDurs[k];
+                nLen[k] = _parseWordLens[k];
+            }
+            _parseWordOffsets = nOff;
+            _parseWordDurs = nDur;
+            _parseWordLens = nLen;
+        }
+        _parseWordOffsets[_parseWordTotal] = offsetSec;
+        _parseWordDurs[_parseWordTotal] = durSec;
+        _parseWordLens[_parseWordTotal] = charLen;
+        _parseWordTotal++;
+    }
+
+    private void AppendParsedLine(float timeSec, string text, int wordStart, int wordCount)
     {
         if (_parseCount >= _parseTimes.Length)
         {
             int nextSize = _parseTimes.Length * 2;
             float[] nextTimes = new float[nextSize];
             string[] nextTexts = new string[nextSize];
+            int[] nextWStarts = new int[nextSize];
+            int[] nextWCounts = new int[nextSize];
             for (int k = 0; k < _parseCount; k++)
             {
                 nextTimes[k] = _parseTimes[k];
                 nextTexts[k] = _parseTexts[k];
+                nextWStarts[k] = _parseWordStarts[k];
+                nextWCounts[k] = _parseWordCounts[k];
             }
             _parseTimes = nextTimes;
             _parseTexts = nextTexts;
+            _parseWordStarts = nextWStarts;
+            _parseWordCounts = nextWCounts;
         }
         _parseTimes[_parseCount] = timeSec;
         _parseTexts[_parseCount] = text;
+        _parseWordStarts[_parseCount] = wordStart;
+        _parseWordCounts[_parseCount] = wordCount;
         _parseCount++;
     }
 
