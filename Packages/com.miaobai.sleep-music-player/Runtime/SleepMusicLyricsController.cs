@@ -1342,9 +1342,10 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         _parseCount++;
     }
 
+    // 全文扫描顶层字段（Go map 序列化按字母排序，song_name/singer 位于 lyrics 之后，不能截断在 4096 字节）
     private string ReadTopString(string json, string key)
     {
-        int pos = FindKeyStart(json, 0, Mathf.Min(json.Length, 4096), key);
+        int pos = FindKeyStart(json, 0, json.Length, key);
         if (pos < 0 || json[pos] != '"') return "";
         int next;
         return ParseStringAt(json, pos, out next);
@@ -1352,7 +1353,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private float ReadTopNumber(string json, string key)
     {
-        int pos = FindKeyStart(json, 0, Mathf.Min(json.Length, 4096), key);
+        int pos = FindKeyStart(json, 0, json.Length, key);
         if (pos < 0) return 0f;
         int next;
         return ParseNumberAt(json, pos, out next);
