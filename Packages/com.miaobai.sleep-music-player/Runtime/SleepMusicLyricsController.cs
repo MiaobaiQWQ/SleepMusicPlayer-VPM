@@ -30,6 +30,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private const string KeyTitle = "\"title\"";
     private const string KeySinger = "\"singer\"";
     private const string KeyArtist = "\"artist\"";
+    private const string KeyPlatform = "\"platform\"";
     private const string KeyDuration = "\"duration\"";
     private const string KeyLyrics = "\"lyrics\"";
     private const string KeyTransLyrics = "\"tlyrics\"";
@@ -440,9 +441,15 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         TryActivateMusicStage(currentUrl, urlText);
     }
 
-    // 识别音乐接口链接并同时拉取歌词 JSON 与 GPU 封面
+    // 识别音乐接口链接并同时拉取歌词 JSON 与 GPU 封面（遇到常见视频站点直链立即隐身，绝不遮挡视频）
     private void TryActivateMusicStage(VRCUrl currentUrl, string urlText)
     {
+        if (IsKnownVideoUrl(urlText))
+        {
+            ClearMusicStage();
+            return;
+        }
+
         int slotIdx = ExtractSlotIndex(urlText);
         bool isDirect = urlText.Contains(PathDirectMarker);
         bool isSlot = slotIdx >= 0 || (urlText.Contains(PathSlotMarker) && !urlText.Contains(PathExcludeMarker));
@@ -512,8 +519,18 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         // 解析歌曲元信息与双语歌词，并记录解析耗时
         float parseStart = Time.realtimeSinceStartup;
+        string platform = ReadTopString(json, KeyPlatform).ToLower();
         ParseMetadataAndLyrics(json);
         float parseMs = ElapsedMs(parseStart);
+
+        // 严格区分视频与音乐：非音乐平台（如 bilibili / youtube / douyin / generic）直接隐藏音乐舞台，绝不遮挡视频画面
+        bool isMusic = IsMusicPlatform(platform);
+        if (!isMusic && _lyricCount <= 0)
+        {
+            ClearMusicStage();
+            LogInfo("视频模式", "识别为非音乐视频 (" + (string.IsNullOrEmpty(platform) ? "video" : platform) + ")，已隐藏音乐舞台 | 耗时 " + FormatMs(fetchMs));
+            return;
+        }
 
         // 若直链返回了对应槽位的封面地址，则自动触发 GPU 封面拉取
         if (!_hasCover && _pendingImage == null && coverGpuUrls != null)
@@ -525,11 +542,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             }
         }
 
-        // 非音乐视频（无歌名且无歌词）保持舞台隐藏
         if (_lyricCount <= 0 && string.IsNullOrEmpty(_songName))
         {
-            if (musicStageRoot != null) musicStageRoot.SetActive(false);
-            LogInfo("拉取完成", "非歌词视频，已隐藏歌词舞台 | 拉取耗时 " + FormatMs(fetchMs));
+            ClearMusicStage();
             return;
         }
 
@@ -1098,6 +1113,27 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     #endregion
 
     #region 轻量 Udon 安全 JSON 与槽位解析
+
+    // 判断链接是否明确指向视频平台（B站/YouTube/抖音/A站/快手/Twitch等）
+    private bool IsKnownVideoUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        string u = url.ToLower();
+        return u.Contains("bilibili.com") || u.Contains("b23.tv") ||
+               u.Contains("youtube.com") || u.Contains("youtu.be") ||
+               u.Contains("douyin.com") || u.Contains("iesdouyin.com") ||
+               u.Contains("acfun.cn") || u.Contains("kuaishou.com") ||
+               u.Contains("twitch.tv") || u.Contains("nicovideo.jp");
+    }
+
+    // 仅音乐平台允许在无歌词时以「纯音乐居中黑胶」形态展示
+    private bool IsMusicPlatform(string platform)
+    {
+        if (string.IsNullOrEmpty(platform)) return false;
+        return platform == "netease" || platform == "qqmusic" || platform == "qq" ||
+               platform == "kugou" || platform == "kuwo" || platform == "qishui" ||
+               platform == "spotify" || platform == "applemusic";
+    }
 
     // 从链接中解析 /s/<数字> 槽位号，范围受 poolCapacity 约束
     private int ExtractSlotIndex(string url)
