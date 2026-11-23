@@ -118,6 +118,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     public Text activeTranslationText;
     public Material activeLyricGpuMat;
     public Text statusBadgeText;
+    [Tooltip("可选：左侧封面卡片与中线，纯音乐时自动居中展示（留空将自动按子物体名查找）")]
+    public RectTransform coverCardRect;
+    public GameObject centerDividerObject;
 
     [Header("同步、上色与日志调优")]
     [Tooltip("歌词时间补偿（微调负值可抵消 AVPro 音频缓冲延迟，单位：秒）")]
@@ -192,6 +195,11 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private float _transBaseAlpha;
     private float _activeExactWidth = 520f;
 
+    // 左侧封面/标题基准 X（用于在「带歌词双栏」与「纯音乐居中唱片」之间动态切换）
+    private float _leftColumnBaseX = -460f;
+    private bool _isInstrumentalMode;
+    private float _lastLocalTime = -1f;
+
     // JSON 解析临时缓冲
     private float[] _parseTimes;
     private string[] _parseTexts;
@@ -242,6 +250,67 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             _transBaseY = _transRect.anchoredPosition.y;
             _transBaseAlpha = activeTranslationText.color.a;
         }
+
+        // 自动查找封面卡片与中线，支持纯音乐自动居中动态排版
+        if (musicStageRoot != null)
+        {
+            Transform rootT = musicStageRoot.transform;
+            if (coverCardRect == null)
+            {
+                Transform cardT = rootT.Find("GPU_AlbumCoverCard");
+                if (cardT != null) coverCardRect = cardT.GetComponent<RectTransform>();
+            }
+            if (centerDividerObject == null)
+            {
+                Transform divT = rootT.Find("Divider_Vertical");
+                if (divT != null) centerDividerObject = divT.gameObject;
+            }
+        }
+        if (coverCardRect != null) _leftColumnBaseX = coverCardRect.anchoredPosition.x;
+        else if (songTitleText != null) _leftColumnBaseX = songTitleText.rectTransform.anchoredPosition.x;
+    }
+
+    // 根据当前播放内容动态切换舞台形态：带歌词双栏 ↔ 纯音乐居中黑胶卡片
+    private void ApplyContentLayoutMode(bool instrumental)
+    {
+        CacheLyricLayout();
+        _isInstrumentalMode = instrumental;
+        float targetX = instrumental ? 0f : _leftColumnBaseX;
+
+        if (coverCardRect != null)
+        {
+            Vector2 p = coverCardRect.anchoredPosition;
+            p.x = targetX;
+            coverCardRect.anchoredPosition = p;
+        }
+        if (songTitleText != null)
+        {
+            Vector2 p = songTitleText.rectTransform.anchoredPosition;
+            p.x = targetX;
+            songTitleText.rectTransform.anchoredPosition = p;
+        }
+        if (songArtistText != null)
+        {
+            Vector2 p = songArtistText.rectTransform.anchoredPosition;
+            p.x = targetX;
+            songArtistText.rectTransform.anchoredPosition = p;
+        }
+        if (statusBadgeText != null)
+        {
+            Vector2 p = statusBadgeText.rectTransform.anchoredPosition;
+            p.x = targetX;
+            statusBadgeText.rectTransform.anchoredPosition = p;
+        }
+        if (centerDividerObject != null) centerDividerObject.SetActive(!instrumental);
+
+        if (lyricLineTexts != null)
+        {
+            for (int i = 0; i < lyricLineTexts.Length; i++)
+            {
+                if (lyricLineTexts[i] != null) lyricLineTexts[i].gameObject.SetActive(!instrumental);
+            }
+        }
+        if (activeTranslationText != null) activeTranslationText.gameObject.SetActive(!instrumental);
     }
 
     private void Update()
@@ -263,11 +332,30 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             SetCoverBlend(_coverBlend);
         }
 
-        // 驱动歌词切行与 GPU 金色扫光上色
+        // 严格跟随当前玩家本地播放位置与播放状态（支持中途进图、拖动进度条、暂停与缓冲提示）
         if (_hasMusicLyrics && vvmwCore != null && musicStageRoot != null && musicStageRoot.activeSelf)
         {
-            UpdateLyrics(vvmwCore.Time);
-            UpdateLineFlipAnimation();
+            if (vvmwCore.IsLoading && !vvmwCore.IsPlaying)
+            {
+                SetStatus("正在缓冲同步当前进度...");
+            }
+            else if (vvmwCore.IsPaused)
+            {
+                float pausedTime = vvmwCore.Time;
+                if (Mathf.Abs(pausedTime - _lastLocalTime) > 0.05f)
+                {
+                    _lastLocalTime = pausedTime;
+                    UpdateLyrics(pausedTime);
+                }
+            }
+            else
+            {
+                float localTime = vvmwCore.Time;
+                _lastLocalTime = localTime;
+                if (!_isInstrumentalMode) SetStatus("");
+                UpdateLyrics(localTime);
+                UpdateLineFlipAnimation();
+            }
         }
     }
 
@@ -447,9 +535,13 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         _hasMusicLyrics = true;
         _currentLineIdx = -2;
+        _lastLocalTime = -1f;
+        bool isInstrumental = _lyricCount <= 0 || (_lyricCount == 1 && _lyricTexts[0].Contains("纯音乐"));
+        ApplyContentLayoutMode(isInstrumental);
+
         if (songTitleText != null) songTitleText.text = string.IsNullOrEmpty(_songName) ? "正在播放" : _songName;
         if (songArtistText != null) songArtistText.text = _singer;
-        SetStatus(_lyricCount > 0 ? "" : "纯音乐 / 暂无歌词");
+        SetStatus(isInstrumental ? "♪ 静享此刻 · 纯音乐 ♪" : "");
         if (musicStageRoot != null) musicStageRoot.SetActive(true);
 
         LogInfo("拉取成功",
@@ -624,8 +716,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         int prevIdx = _currentLineIdx;
         _currentLineIdx = idx;
-        _flipProgress = 0.65f;
-        _scrollProgress = (prevIdx >= -1) ? 0f : 1f;
+        bool isSequentialStep = prevIdx >= -1 && Mathf.Abs(idx - prevIdx) == 1;
+        _flipProgress = isSequentialStep ? 0.65f : 1f;
+        _scrollProgress = isSequentialStep ? 0f : 1f;
         _scrollDirection = (idx < prevIdx) ? 1f : -1f;
         _lineSweepStartTime = renderStart;
         _lineSweepFinishedLogged = false;
