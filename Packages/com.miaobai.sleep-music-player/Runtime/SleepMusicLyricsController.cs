@@ -123,12 +123,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     public GameObject centerDividerObject;
 
     [Header("同步、上色与日志调优")]
-    [Tooltip("歌词时间补偿（微调负值可抵消 AVPro 音频缓冲延迟，单位：秒）")]
-    public float lyricTimeOffset = -0.10f;
+    [Tooltip("歌词时间补偿（微调可对齐本地音频缓冲，单位：秒）")]
+    public float lyricTimeOffset = -0.05f;
 
-    [Tooltip("无逐字时间轴时，单句金色上色占行间隔的比例（0.90 贴合唱完节奏）")]
+    [Tooltip("无逐字时间轴时，单句最大上色占比（同时受字数自然唱速约束，防止间奏拖慢）")]
     [Range(0.2f, 1.0f)]
-    public float sweepDurationRatio = 0.90f;
+    public float sweepDurationRatio = 0.92f;
 
     [Tooltip("是否在 VRChat 控制台输出详细中文性能日志")]
     public bool enableVrcDebugLog = true;
@@ -948,12 +948,27 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
     }
 
+    // 结合「行时间间隔」与「本句字数自然唱速」估算真实演唱时长，防止间奏拖慢或快歌跟不上
     private float ComputeVocalSpan(int idx)
     {
         float t0 = _lyricTimes[idx];
         float t1 = (idx + 1 < _lyricCount) ? _lyricTimes[idx + 1] : (_duration > t0 ? _duration : t0 + 4.0f);
-        float rawGap = Mathf.Max(0.4f, t1 - t0);
-        return Mathf.Clamp(rawGap * sweepDurationRatio, 0.35f, 8.0f);
+        float rawGap = Mathf.Max(0.35f, t1 - t0);
+        float gapLimit = rawGap * sweepDurationRatio;
+
+        string line = (idx >= 0 && idx < _lyricCount) ? _lyricTexts[idx] : "";
+        float syllables = 0f;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (c > 127) syllables += 1.0f;                                      // 中/日/韩单字按 1 拍计算
+            else if (c == ' ' || c == ',' || c == '.' || c == '，' || c == '。') syllables += 0.18f;
+            else syllables += 0.36f;                                             // 英文字符按音节折算
+        }
+
+        // 自然演唱估算时长（每拍约 0.28s + 起唱尾音 0.25s）；取与行间隔的较小值，快段提速、间奏不拖慢
+        float naturalSpan = 0.25f + syllables * 0.28f;
+        return Mathf.Clamp(Mathf.Min(gapLimit, naturalSpan), 0.35f, 6.5f);
     }
 
     private float EstimateLinePixelWidth(string text)
