@@ -120,12 +120,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     public Text statusBadgeText;
 
     [Header("同步、上色与日志调优")]
-    [Tooltip("歌词时间补偿（正值略微提前切行贴合人声起唱，单位：秒）")]
-    public float lyricTimeOffset = 0.15f;
+    [Tooltip("歌词时间补偿（微调负值可抵消 AVPro 音频缓冲延迟，单位：秒）")]
+    public float lyricTimeOffset = -0.10f;
 
-    [Tooltip("单句金色上色占行间隔的比例（0.68 贴合人声唱完节奏）")]
+    [Tooltip("无逐字时间轴时，单句金色上色占行间隔的比例（0.90 贴合唱完节奏）")]
     [Range(0.2f, 1.0f)]
-    public float sweepDurationRatio = 0.68f;
+    public float sweepDurationRatio = 0.90f;
 
     [Tooltip("是否在 VRChat 控制台输出详细中文性能日志")]
     public bool enableVrcDebugLog = true;
@@ -739,9 +739,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             else
             {
                 float vocalSpan = ComputeVocalSpan(idx);
-                float rawT = Mathf.Clamp01(relSec / vocalSpan);
-                // 无逐字时间轴时做轻微尾音缓出，比纯线性匀速更贴合真实唱感
-                sweep = Mathf.Clamp01(rawT * (1.14f - 0.14f * rawT));
+                sweep = Mathf.Clamp01(relSec / vocalSpan);
             }
 
             if (sweep >= 0.999f && !_lineSweepFinishedLogged)
@@ -860,9 +858,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private float ComputeVocalSpan(int idx)
     {
         float t0 = _lyricTimes[idx];
-        float t1 = (idx + 1 < _lyricCount) ? _lyricTimes[idx + 1] : (_duration > t0 ? _duration : t0 + 3.5f);
+        float t1 = (idx + 1 < _lyricCount) ? _lyricTimes[idx + 1] : (_duration > t0 ? _duration : t0 + 4.0f);
         float rawGap = Mathf.Max(0.4f, t1 - t0);
-        return Mathf.Clamp(rawGap * sweepDurationRatio, 0.35f, 4.2f);
+        return Mathf.Clamp(rawGap * sweepDurationRatio, 0.35f, 8.0f);
     }
 
     private float EstimateLinePixelWidth(string text)
