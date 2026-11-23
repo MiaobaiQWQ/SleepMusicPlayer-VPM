@@ -1,4 +1,4 @@
-// 歌词单行 GPU 逐字扫光上色着色器：支持逐字暖金推进、正在演唱字符微上浮与柔和泛光。
+// 歌词单行 GPU 逐字扫光上色着色器：基于 Canvas 真实左边界与渲染宽度实现精准逐字暖金推进与微上浮。
 Shader "SleepSanctuary/GPU/LyricLineSweep"
 {
     Properties
@@ -8,10 +8,11 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
         _ActiveColor ("已唱暖金色", Color) = (0.98, 0.78, 0.50, 1)
         _IdleColor ("未唱珍珠白", Color) = (0.86, 0.84, 0.80, 0.78)
         _Sweep ("逐字上色进度 (0..1)", Range(0, 1)) = 1.0
-        _TextWidth ("当前句实际宽度 (px)", Range(120, 900)) = 520.0
+        _StartX ("文本左边界 Canvas X (px)", Float) = -162.0
+        _TextWidth ("当前句实际宽度 (px)", Range(40, 900)) = 520.0
         _FlipFade ("切行上浮渐显 (0..1)", Range(0, 1)) = 1.0
         _IsActive ("是否当前高亮句", Range(0, 1)) = 1.0
-        _FloatHeight ("逐字上浮高度 (px)", Range(0, 8)) = 4.2
+        _FloatHeight ("逐字上浮高度 (px)", Range(0, 10)) = 5.5
     }
 
     SubShader
@@ -47,6 +48,7 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
             fixed4 _ActiveColor;
             fixed4 _IdleColor;
             float _Sweep;
+            float _StartX;
             float _TextWidth;
             float _FlipFade;
             float _IsActive;
@@ -55,12 +57,12 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
             v2f vert(appdata v)
             {
                 v2f o;
-                // 按当前行实际像素宽度归一化水平坐标（860px 容器左边界为 -430）
-                float localX = saturate((v.vertex.x + 430.0) / max(_TextWidth, 120.0));
+                // Unity UI Canvas 网格顶点位于 Canvas 本地坐标系，减去真实左边界 _StartX 后再除以真实字宽
+                float localX = saturate((v.vertex.x - _StartX) / max(_TextWidth, 40.0));
 
                 float3 p = v.vertex.xyz;
-                // 切行时整体丝滑上浮
-                p.y -= (1.0 - _FlipFade) * 14.0;
+                // 切行时轻快微上浮
+                p.y -= (1.0 - _FlipFade) * 10.0;
                 // Apple Music 风格逐字上浮：刚被扫到的字符轻柔抬起再落回
                 float activeWindow = step(0.004, _Sweep) * step(_Sweep, 0.996) * _IsActive;
                 float lift = exp(-pow((localX - _Sweep) * 7.5, 2.0)) * _FloatHeight * activeWindow;
@@ -82,7 +84,7 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
 
                 // 当前正在演唱字符的细腻柔光高亮
                 float activeWindow = step(0.004, _Sweep) * step(_Sweep, 0.996);
-                float wordGlow = exp(-pow((i.localX - _Sweep) * 14.0, 2.0)) * 0.22 * activeWindow;
+                float wordGlow = exp(-pow((i.localX - _Sweep) * 14.0, 2.0)) * 0.24 * activeWindow;
                 activeRgb = saturate(activeRgb + wordGlow);
 
                 fixed3 rgb = lerp(i.color.rgb, activeRgb, _IsActive);

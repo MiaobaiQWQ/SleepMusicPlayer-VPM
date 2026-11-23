@@ -30,9 +30,11 @@ Material:
     m_Ints: []
     m_Floats:
     - _FlipFade: 1
+    - _FloatHeight: 5.5
     - _IsActive: 1
-    - _Sweep: 0.58
-    - _TextWidth: 720
+    - _StartX: -162
+    - _Sweep: 0.5
+    - _TextWidth: 522
     m_Colors:
     - _ActiveColor: {r: 0.97999996, g: 0.78, b: 0.5, a: 1}
     - _Color: {r: 1, g: 1, b: 1, a: 1}

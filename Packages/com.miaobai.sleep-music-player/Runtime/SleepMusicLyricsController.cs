@@ -22,6 +22,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private const string PropMainTex = "_MainTex";
     private const string PropHasCover = "_HasCover";
     private const string PropFlipFade = "_FlipFade";
+    private const string PropStartX = "_StartX";
     private const string PropTextWidth = "_TextWidth";
     private const string PropSweep = "_Sweep";
 
@@ -599,13 +600,24 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         float renderMs = ElapsedMs(renderStart);
 
-        // 根据本句字宽与逐字区间更新 GPU 上色参数并记录提交耗时
+        // 根据本句在 Canvas 内的真实左边界与精确渲染宽度更新 GPU 上色参数
         float colorStart = Time.realtimeSinceStartup;
         BuildActiveLineWordLayout(idx, currentLine);
         if (activeLyricGpuMat != null)
         {
+            Text activeTxt = lyricLineTexts[2];
+            float startX = -162f;
+            float exactW = EstimateLinePixelWidth(currentLine);
+            if (activeTxt != null)
+            {
+                RectTransform art = activeTxt.rectTransform;
+                if (art != null) startX = art.anchoredPosition.x - art.rect.width * art.pivot.x;
+                float prefW = activeTxt.preferredWidth;
+                if (prefW > 20f) exactW = Mathf.Clamp(prefW, 40f, art != null ? art.rect.width : 860f);
+            }
             activeLyricGpuMat.SetFloat(PropFlipFade, 0.55f);
-            activeLyricGpuMat.SetFloat(PropTextWidth, EstimateLinePixelWidth(currentLine));
+            activeLyricGpuMat.SetFloat(PropStartX, startX);
+            activeLyricGpuMat.SetFloat(PropTextWidth, exactW);
         }
         float colorMs = ElapsedMs(colorStart);
 
