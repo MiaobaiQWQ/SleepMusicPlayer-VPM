@@ -51,6 +51,8 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private const float PollIntervalSec = 0.15f;
     private const float CoverFadeSpeed = 2.2f;
     private const float LineFlipSpeed = 9.0f;
+    private const float ScrollTransitionDuration = 0.38f;
+    private const float ScrollTravelPx = 88f;
     private const float TransMatchWindowSec = 0.65f;
 
     #endregion
@@ -173,10 +175,22 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private float[] _activeWordEndU = new float[128];
     private int _activeWordCount;
 
-    // 切行与动画状态
+    // 切行与丝滑滚动过渡动画状态
     private int _currentLineIdx = -2;
     private float _flipProgress = 1f;
+    private float _scrollProgress = 1f;
+    private float _scrollDirection = -1f;
     private float _nextSyncCheck;
+
+    // 预缓存 5 行歌词与翻译的基准布局坐标与透明度（用于平滑滚动插值，零每帧分配）
+    private bool _layoutCached;
+    private RectTransform[] _lineRects;
+    private float[] _lineBaseY;
+    private float[] _lineBaseAlpha;
+    private RectTransform _transRect;
+    private float _transBaseY;
+    private float _transBaseAlpha;
+    private float _activeExactWidth = 520f;
 
     // JSON 解析临时缓冲
     private float[] _parseTimes;
@@ -195,9 +209,39 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private void Start()
     {
+        CacheLyricLayout();
         if (musicStageRoot != null) musicStageRoot.SetActive(false);
         SetCoverBlend(0f);
         RestoreFixedPrefixIfEmpty();
+    }
+
+    // 缓存 5 行歌词与翻译的初始位置与透明度，供切行滚动动画复用
+    private void CacheLyricLayout()
+    {
+        if (_layoutCached) return;
+        _layoutCached = true;
+
+        if (lyricLineTexts != null && lyricLineTexts.Length > 0)
+        {
+            int n = lyricLineTexts.Length;
+            _lineRects = new RectTransform[n];
+            _lineBaseY = new float[n];
+            _lineBaseAlpha = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                if (lyricLineTexts[i] == null) continue;
+                _lineRects[i] = lyricLineTexts[i].rectTransform;
+                _lineBaseY[i] = _lineRects[i].anchoredPosition.y;
+                _lineBaseAlpha[i] = lyricLineTexts[i].color.a;
+            }
+        }
+
+        if (activeTranslationText != null)
+        {
+            _transRect = activeTranslationText.rectTransform;
+            _transBaseY = _transRect.anchoredPosition.y;
+            _transBaseAlpha = activeTranslationText.color.a;
+        }
     }
 
     private void Update()
@@ -572,13 +616,17 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         return idx;
     }
 
-    // 切换歌词显示行并统计本次文本渲染耗时
+    // 切换歌词显示行，触发整组 5 行平滑上推过渡动画并统计本次渲染耗时
     private void SwitchLyricLine(int idx)
     {
+        CacheLyricLayout();
         float renderStart = Time.realtimeSinceStartup;
 
+        int prevIdx = _currentLineIdx;
         _currentLineIdx = idx;
-        _flipProgress = 0.55f;
+        _flipProgress = 0.65f;
+        _scrollProgress = (prevIdx >= -1) ? 0f : 1f;
+        _scrollDirection = (idx < prevIdx) ? 1f : -1f;
         _lineSweepStartTime = renderStart;
         _lineSweepFinishedLogged = false;
 
@@ -615,10 +663,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
                 float prefW = activeTxt.preferredWidth;
                 if (prefW > 20f) exactW = Mathf.Clamp(prefW, 40f, art != null ? art.rect.width : 860f);
             }
-            activeLyricGpuMat.SetFloat(PropFlipFade, 0.55f);
+            _activeExactWidth = exactW;
+            activeLyricGpuMat.SetFloat(PropFlipFade, 0.65f);
             activeLyricGpuMat.SetFloat(PropStartX, startX);
             activeLyricGpuMat.SetFloat(PropTextWidth, exactW);
         }
+        ApplyScrollAnimationFrame();
         float colorMs = ElapsedMs(colorStart);
 
         if (idx >= 0 && !string.IsNullOrEmpty(currentLine))
@@ -728,15 +778,82 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         return 1f;
     }
 
-    // 平滑推进切行上浮渐显动画
+    // 平滑推进切行上浮、5 行整体滚动位移与主行缩放过渡动画（Cubic Ease-Out）
     private void UpdateLineFlipAnimation()
     {
-        if (_flipProgress >= 1f) return;
-        _flipProgress = Mathf.MoveTowards(_flipProgress, 1f, Time.deltaTime * LineFlipSpeed);
-        if (activeLyricGpuMat != null)
+        if (_flipProgress < 1f)
         {
-            float ease = _flipProgress * _flipProgress * (3f - 2f * _flipProgress);
-            activeLyricGpuMat.SetFloat(PropFlipFade, ease);
+            _flipProgress = Mathf.MoveTowards(_flipProgress, 1f, Time.deltaTime * LineFlipSpeed);
+            if (activeLyricGpuMat != null)
+            {
+                float ease = _flipProgress * _flipProgress * (3f - 2f * _flipProgress);
+                activeLyricGpuMat.SetFloat(PropFlipFade, ease);
+            }
+        }
+
+        if (_scrollProgress < 1f)
+        {
+            _scrollProgress = Mathf.MoveTowards(_scrollProgress, 1f, Time.deltaTime / ScrollTransitionDuration);
+            ApplyScrollAnimationFrame();
+        }
+    }
+
+    // 应用当前帧的 5 行滚动偏移、主/副行弹性缩放与边缘淡入，并实时同步 GPU 扫光左边界
+    private void ApplyScrollAnimationFrame()
+    {
+        if (!_layoutCached || _lineRects == null) return;
+
+        // Cubic Ease-Out: 初段利落响应，末段丝滑减速落位
+        float inv = 1f - Mathf.Clamp01(_scrollProgress);
+        float remain = inv * inv * inv;
+        float offsetY = _scrollDirection * ScrollTravelPx * remain;
+
+        for (int i = 0; i < _lineRects.Length; i++)
+        {
+            RectTransform rt = _lineRects[i];
+            if (rt == null) continue;
+
+            Vector2 pos = rt.anchoredPosition;
+            pos.y = _lineBaseY[i] + offsetY;
+            rt.anchoredPosition = pos;
+
+            // 当前句由 0.88 平滑放大到 1.00，刚唱完上移的上一句由 1.12 平滑回落到 1.00
+            float scale = 1f;
+            if (i == 2) scale = 1f - 0.12f * remain;
+            else if (i == 1 && _scrollDirection < 0f) scale = 1f + 0.12f * remain;
+            rt.localScale = new Vector3(scale, scale, 1f);
+
+            // 新进入底部的第 5 行柔和淡入
+            if (i == 4 && lyricLineTexts[i] != null)
+            {
+                Color c = lyricLineTexts[i].color;
+                c.a = _lineBaseAlpha[i] * (1f - 0.85f * remain);
+                lyricLineTexts[i].color = c;
+            }
+        }
+
+        if (_transRect != null)
+        {
+            Vector2 tpos = _transRect.anchoredPosition;
+            tpos.y = _transBaseY + offsetY * 0.85f;
+            _transRect.anchoredPosition = tpos;
+
+            if (activeTranslationText != null)
+            {
+                Color tc = activeTranslationText.color;
+                tc.a = _transBaseAlpha * (1f - 0.65f * remain);
+                activeTranslationText.color = tc;
+            }
+        }
+
+        // 缩放动画进行期间同步更新 _StartX 与 _TextWidth，保证逐字扫光全程像素级锁死
+        if (activeLyricGpuMat != null && _lineRects.Length > 2 && _lineRects[2] != null)
+        {
+            RectTransform art = _lineRects[2];
+            float s = art.localScale.x;
+            float startX = art.anchoredPosition.x - art.rect.width * art.pivot.x * s;
+            activeLyricGpuMat.SetFloat(PropStartX, startX);
+            activeLyricGpuMat.SetFloat(PropTextWidth, Mathf.Max(40f, _activeExactWidth * s));
         }
     }
 
