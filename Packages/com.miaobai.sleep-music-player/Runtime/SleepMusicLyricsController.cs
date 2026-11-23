@@ -49,7 +49,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private const float PollIntervalSec = 0.15f;
     private const float CoverFadeSpeed = 2.2f;
-    private const float LineFlipSpeed = 2.8f;
+    private const float LineFlipSpeed = 9.0f;
     private const float TransMatchWindowSec = 0.65f;
 
     #endregion
@@ -117,8 +117,8 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     public Text statusBadgeText;
 
     [Header("同步、上色与日志调优")]
-    [Tooltip("歌词时间补偿（负值可抵消音频缓冲延迟，单位：秒）")]
-    public float lyricTimeOffset = -0.45f;
+    [Tooltip("歌词时间补偿（正值略微提前切行贴合人声起唱，单位：秒）")]
+    public float lyricTimeOffset = 0.15f;
 
     [Tooltip("单句金色上色占行间隔的比例（0.68 贴合人声唱完节奏）")]
     [Range(0.2f, 1.0f)]
@@ -577,7 +577,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         float renderStart = Time.realtimeSinceStartup;
 
         _currentLineIdx = idx;
-        _flipProgress = 0f;
+        _flipProgress = 0.55f;
         _lineSweepStartTime = renderStart;
         _lineSweepFinishedLogged = false;
 
@@ -604,7 +604,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         BuildActiveLineWordLayout(idx, currentLine);
         if (activeLyricGpuMat != null)
         {
-            activeLyricGpuMat.SetFloat(PropFlipFade, 0f);
+            activeLyricGpuMat.SetFloat(PropFlipFade, 0.55f);
             activeLyricGpuMat.SetFloat(PropTextWidth, EstimateLinePixelWidth(currentLine));
         }
         float colorMs = ElapsedMs(colorStart);

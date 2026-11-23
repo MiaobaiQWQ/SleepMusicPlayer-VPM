@@ -14794,7 +14794,7 @@ MonoBehaviour:
   activeTranslationText: {fileID: 3546666571538029130}
   activeLyricGpuMat: {fileID: 2100000, guid: 0a465243fdcada245ab6e575a7e5d171, type: 2}
   statusBadgeText: {fileID: 6916805789117271292}
-  lyricTimeOffset: -0.45
+  lyricTimeOffset: 0.15
   sweepDurationRatio: 0.68
   enableVrcDebugLog: 1
 --- !u!114 &7068790197143474437
