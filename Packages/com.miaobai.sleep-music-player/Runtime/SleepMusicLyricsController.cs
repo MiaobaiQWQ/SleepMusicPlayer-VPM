@@ -47,6 +47,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private const string PathSlotMarker = "/s/";
     private const string PathDirectMarker = "/v4/vrc";
+    private const string PathDanmakuMarker = "/v3/vrc-danmaku";
     private const string PathSubmitMarker = "/p?";
     private const string PathExcludeMarker = "/sell/";
     private const string QueryUrlKey = "u=";
@@ -154,6 +155,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     public RectTransform coverCardRect;
     public GameObject centerDividerObject;
 
+    [Header("弹幕叠加层（播放 B站 / 抖音 / YouTube 视频时自动显示，不遮挡视频）")]
+    public SleepDanmakuOverlay danmakuOverlay;
+
     [Header("同步、上色与日志调优")]
     [Tooltip("歌词时间补偿（微调可对齐本地音频缓冲，单位：秒）")]
     public float lyricTimeOffset = -0.05f;
@@ -176,6 +180,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private VRCUrl _manualSubmittedUrl;
     private string _pendingStringUrl = "";
     private bool _pendingIsPollOrSubmit;
+    private bool _pendingIsDanmaku;
     private bool _hasMusicLyrics;
     private bool _hasCover;
     private float _coverBlend;
@@ -394,6 +399,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
                 UpdateLyrics(localTime);
                 UpdateLineFlipAnimation();
             }
+        }
+
+        // 视频弹幕实时同步（不依赖 musicStageRoot 显隐，透明覆盖于任意播放器屏幕之上）
+        if (danmakuOverlay != null && danmakuOverlay.HasDanmaku && HasAnyPlayerBound())
+        {
+            danmakuOverlay.SyncPlayback(GetPlaybackTime(), IsAnyPlayerPlaying(), IsAnyPlayerPaused());
         }
     }
 
@@ -647,6 +658,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         if (stopped)
         {
             if (_hasMusicLyrics || _hasCover || !string.IsNullOrEmpty(_lastPlayedUrl)) ClearMusicStage();
+            if (danmakuOverlay != null && danmakuOverlay.HasDanmaku) danmakuOverlay.ClearDanmaku();
             _manualSubmittedUrl = VRCUrl.Empty;
             return;
         }
@@ -665,17 +677,36 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         TryActivateMusicStage(currentUrl, urlText);
     }
 
-    // 识别音乐接口链接并同时拉取歌词 JSON 与 GPU 封面（遇到常见视频站点直链立即隐身，绝不遮挡视频）
+    // 识别音乐/视频接口链接：音乐激活 GPU 封面与歌词舞台；视频（/v3/vrc-danmaku 或 /v4/vrc 视频）隐藏舞台并拉取透明弹幕
     private void TryActivateMusicStage(VRCUrl currentUrl, string urlText)
     {
-        if (IsKnownVideoUrl(urlText))
+        if (danmakuOverlay != null) danmakuOverlay.ClearDanmaku();
+
+        bool isDanmakuApi = urlText.Contains(PathDanmakuMarker);
+        bool isDirect = urlText.Contains(PathDirectMarker);
+        bool isVideo = IsKnownVideoUrl(urlText);
+
+        // 视频弹幕分支：绝不激活不透明音乐封面舞台，仅拉取弹幕 JSON
+        if (isDanmakuApi || (isDirect && isVideo))
+        {
+            ClearMusicStage();
+            if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
+            {
+                _pendingIsDanmaku = true;
+                LogInfo("弹幕拉取", "检测到视频弹幕链接，开始拉取弹幕 | 链接: " + urlText);
+                StartStringFetch(currentUrl, false, "");
+            }
+            return;
+        }
+
+        if (isVideo)
         {
             ClearMusicStage();
             return;
         }
 
+        _pendingIsDanmaku = false;
         int slotIdx = ExtractSlotIndex(urlText);
-        bool isDirect = urlText.Contains(PathDirectMarker);
         bool isSlot = slotIdx >= 0 || (urlText.Contains(PathSlotMarker) && !urlText.Contains(PathExcludeMarker));
 
         if (!isDirect && !isSlot)
@@ -737,6 +768,20 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             {
                 LogWarn("拉取结果", "音乐池无可用单曲 | 耗时 " + FormatMs(fetchMs));
                 SetStatus("音乐池暂无可用单曲");
+            }
+            return;
+        }
+
+        // 弹幕分支：显式弹幕请求，或 /v4/vrc 自动模式下返回了 comments/danmaku 而非歌词
+        bool hasCommentsField = json.IndexOf("\"comments\"") >= 0 || json.IndexOf("\"danmaku\"") >= 0;
+        if (_pendingIsDanmaku || (hasCommentsField && json.IndexOf(KeyLyrics) < 0))
+        {
+            _pendingIsDanmaku = false;
+            ClearMusicStage();
+            if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
+            {
+                int loaded = danmakuOverlay.LoadFromJson(json);
+                LogInfo("弹幕就绪", "网络耗时 " + FormatMs(fetchMs) + " | 已加载 " + loaded + " 条弹幕");
             }
             return;
         }
