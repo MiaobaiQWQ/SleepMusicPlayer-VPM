@@ -1,5 +1,12 @@
 dist/
 scripts/
+scratch/
+Tests/
+*Test*.cs
+*Test*.cs.meta
+*.tmp
+*.bak
+*.log
 __pycache__/
 *.pyc
 .DS_Store
