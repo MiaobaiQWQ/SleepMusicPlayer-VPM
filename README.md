@@ -2,7 +2,10 @@
 
 **支持任意 VRChat 视频播放器（零第三方依赖）** 的开箱即用 GPU 音乐歌词舞台 VPM 扩展包——**无需使用底部控件栏**，可将纯歌词与封面舞台直接拖到任意播放器屏幕上自动适配大小与朝向！
 
-![纯歌词与封面舞台实机渲染预览](docs/preview-stage.png)
+![纯歌词与封面舞台实机渲染预览](docs/preview-stage.gif)
+
+### GPU 弹幕叠加层实机动态预览（真实 B 站视频 [`BV1iiWi6oE9b`](https://www.bilibili.com/video/BV1iiWi6oE9b) 弹幕）
+![GPU 弹幕叠加层实机动态预览](docs/preview-danmaku.gif)
 
 ## 核心特性
 - **纯歌词与封面舞台（无底部控件栏，适配任意播放器）**：内置独立 `SleepMusicStage (Lyrics & Cover Only).prefab`，仅负责 **GPU BC1 封面解码、流体光晕氛围背景与逐字暖金歌词展示**，不接管也不遮挡原播放器的控制栏。
