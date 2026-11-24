@@ -1,9 +1,12 @@
 # SleepMusic Player · 眠境音乐歌词播放器 (VPM)
 
-**支持任意 VRChat 视频播放器（零第三方依赖）** 的开箱即用 GPU 音乐歌词舞台与毛玻璃胶囊播放器 VPM 扩展包。
+**支持任意 VRChat 视频播放器（零第三方依赖）** 的开箱即用 GPU 音乐歌词舞台 VPM 扩展包——**无需使用底部控件栏**，可将纯歌词与封面舞台直接拖到任意播放器屏幕上自动适配大小与朝向！
+
+![纯歌词与封面舞台实机渲染预览](docs/preview-stage.png)
 
 ## 核心特性
-- **全播放器通用（零 VizVid 强依赖）**：仅需 `com.vrchat.worlds >= 3.7.0`，原生兼容 **VizVid、ProTV、YamaPlayer、IWsync、USharpVideo、纯 Udon Graph 播放器以及原生 `VRCAVProVideoPlayer / VRCUnityVideoPlayer`**；在 Inspector 点击 **「一键自动绑定场景内任意播放器」** 即可自动识别底层播放组件、URL 变量与提交事件。
+- **纯歌词与封面舞台（无底部控件栏，适配任意播放器）**：内置独立 `SleepMusicStage (Lyrics & Cover Only).prefab`，仅负责 **GPU BC1 封面解码、流体光晕氛围背景与逐字暖金歌词展示**，不接管也不遮挡原播放器的控制栏。
+- **拖拽自动绑定 + 屏幕自适应 + 反面防护与诊断**：直接拖到任意播放器（**VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 `VRCVideoPlayer`**）下即可自动绑定底层播放器、自动对齐目标屏幕大小与正面法线（自动抵消父级负缩放防止镜像/反面），并提供 **「翻转 180°」** 与 **一键诊断检查**（排查未绑定、负缩放反面、音频静音、材质缺失等常见问题）。
 - **2 行毛玻璃智能胶囊 UI**：音量点击展开抽屉、齿轮设置防抖自动收起、播放时自动隐藏输入框文字避免与时间戳重叠。
 - **GPU BC1 封面解码 & 无重影流体光晕背景**：单 Pass GPU 解码 `wimbc1png1` 数据图集，开启硬件自动 MipMap + 36 点黄金角圆盘流体模糊，彻底消除带文字封面的叠字重影，同时左侧封面卡片保持 Mip 0 100% 锐利。
 - **GPU 逐字暖金扫光歌词**：兼容网易云 YRC / 酷狗 KRC / QQ 原生 QRC 逐字时间轴，无逐字时自动启用音节感知拟真唱速，支持双语翻译、5 行 Apple Music 风格平滑上滑与纯音乐居中黑胶模式，播放 B 站/YouTube 等视频时自动隐身绝不遮挡画面。

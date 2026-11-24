@@ -106,7 +106,17 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     [Tooltip("可选：自定义播放器中保存当前 VRCUrl 的 Udon 变量名（留空则自动兼容主流播放器）")]
     public string customUrlVarName = "";
 
-    [Header("输入框与音乐池切歌桥接（可选）")]
+    [Header("纯舞台模式 / 控件栏开关（适配任意播放器时可关闭底部控件栏）")]
+    [Tooltip("开启后仅更新 GPU 封面解码与歌词展示，不接管/修改任何输入框或底部控件栏")]
+    public bool stageOnlyMode = false;
+
+    [Tooltip("可选：自带底部胶囊控件栏根节点，勾选下方隐藏开关后将自动关闭")]
+    public GameObject controlBarRoot;
+
+    [Tooltip("勾选后运行时自动隐藏自带底部控件栏，仅保留封面与歌词舞台")]
+    public bool hideControlBar = false;
+
+    [Header("输入框与音乐池切歌桥接（纯舞台模式可全部留空）")]
     public VRCUrlInputField urlInputField;
     public GameObject urlInputTextObject;
 
@@ -242,8 +252,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     {
         CacheLyricLayout();
         if (musicStageRoot != null) musicStageRoot.SetActive(false);
+        if (controlBarRoot != null && (hideControlBar || stageOnlyMode)) controlBarRoot.SetActive(false);
         SetCoverBlend(0f);
-        RestoreFixedPrefixIfEmpty();
+        if (!stageOnlyMode) RestoreFixedPrefixIfEmpty();
     }
 
     // 缓存 5 行歌词与翻译的初始位置与透明度，供切行滚动动画复用
@@ -600,10 +611,10 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         StartStringFetch(musicPollUrl, true, "正在同步音乐池...");
     }
 
-    // 播放时自动隐藏输入框文字，避免与底部时间进度条重叠
+    // 播放时自动隐藏输入框文字，避免与底部时间进度条重叠（纯舞台模式不操作输入框）
     private void UpdateInputVisibility()
     {
-        if (urlInputField == null) return;
+        if (stageOnlyMode || urlInputField == null) return;
         bool busy = HasAnyPlayerBound() && (IsAnyPlayerLoading() || IsAnyPlayerPlaying() || IsAnyPlayerPaused());
         bool focused = urlInputField.isFocused;
 

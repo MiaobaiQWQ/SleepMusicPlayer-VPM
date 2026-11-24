@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 using UdonSharp;
 using UdonSharpEditor;
 using VRC.SDK3.Components;
@@ -133,14 +135,23 @@ public static class SleepMusicConfigUtility
         BaseVRCVideoPlayer[] vps = targetRoot.GetComponentsInChildren<BaseVRCVideoPlayer>(true);
         ctrl.videoPlayers = vps;
 
-        // 3) 绑定目标播放器内的输入框与 onEndEdit 提交事件（若目标内无输入框则保留原绑定）
-        VRCUrlInputField foundInput = targetRoot.GetComponentInChildren<VRCUrlInputField>(true);
-        if (foundInput != null)
+        // 3) 非纯舞台模式时，绑定目标播放器内的输入框与 onEndEdit 提交事件（纯舞台模式不接管原播放器控件）
+        if (!ctrl.stageOnlyMode)
         {
-            ctrl.urlInputField = foundInput;
-            TryExtractSubmitEvent(foundInput, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
-            ctrl.playerSubmitTarget = submitTarget;
-            ctrl.playerSubmitEvent = submitEvent;
+            VRCUrlInputField foundInput = targetRoot.GetComponentInChildren<VRCUrlInputField>(true);
+            if (foundInput != null)
+            {
+                ctrl.urlInputField = foundInput;
+                TryExtractSubmitEvent(foundInput, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
+                ctrl.playerSubmitTarget = submitTarget;
+                ctrl.playerSubmitEvent = submitEvent;
+            }
+        }
+
+        // 4) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
+        if (ctrl.stageOnlyMode)
+        {
+            AutoFitToTargetScreen(ctrl, targetRoot);
         }
 
         UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
@@ -155,6 +166,279 @@ public static class SleepMusicConfigUtility
                   " | 底层 VideoPlayer: " + (vps != null ? vps.Length : 0) + " 个" +
                   " | 输入框: " + (ctrl.urlInputField != null ? ctrl.urlInputField.name : "无") +
                   " | 切歌事件: " + (string.IsNullOrEmpty(ctrl.playerSubmitEvent) ? "直调 PlayURL" : ctrl.playerSubmitEvent));
+    }
+
+    /// <summary>
+    /// 自动探测目标播放器屏幕（RawImage 或 3D Quad/Plane MeshRenderer），精确对齐中心、尺寸与正面法线，并抵消父级负缩放防止画面反转。
+    /// </summary>
+    public static bool AutoFitToTargetScreen(SleepMusicLyricsController ctrl, GameObject targetRoot)
+    {
+        if (ctrl == null || targetRoot == null) return false;
+
+        Transform stageRootT = ctrl.transform;
+        Canvas stageCanvas = ctrl.GetComponent<Canvas>();
+        if (stageCanvas == null && ctrl.musicStageRoot != null)
+        {
+            stageCanvas = ctrl.musicStageRoot.GetComponentInParent<Canvas>();
+            if (stageCanvas != null) stageRootT = stageCanvas.transform;
+        }
+        RectTransform stageRect = stageRootT as RectTransform;
+        float refW = (stageRect != null && stageRect.sizeDelta.x > 10f) ? stageRect.sizeDelta.x : 1920f;
+        float refH = (stageRect != null && stageRect.sizeDelta.y > 10f) ? stageRect.sizeDelta.y : 1080f;
+
+        Vector3 center;
+        Vector3 frontNormal;
+        Vector3 screenUp;
+        float worldW;
+        float worldH;
+        string screenName;
+
+        if (!TryDetectScreenGeometry(targetRoot, ctrl.gameObject, out center, out frontNormal, out screenUp, out worldW, out worldH, out screenName))
+        {
+            Debug.LogWarning("[眠境音乐配置] 未在目标对象「" + targetRoot.name + "」中找到可适配的屏幕（RawImage / MeshRenderer），请手动调整舞台位置与大小。");
+            return false;
+        }
+
+        Undo.RecordObject(stageRootT, "自动适配目标播放器屏幕");
+        // 向前偏移 4mm 避免与原屏幕产生 Z-Fighting 或被屏幕遮挡
+        stageRootT.position = center + frontNormal * 0.004f;
+        // Unity UI Canvas 正面朝向 -transform.forward，因此 LookRotation(-frontNormal, screenUp) 确保正面永远朝向观众
+        stageRootT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
+
+        // 计算目标世界缩放并抵消父级缩放（含负缩放），确保绝不镜像反转
+        Vector3 parentLossy = stageRootT.parent != null ? stageRootT.parent.lossyScale : Vector3.one;
+        float sx = (worldW / refW) / (Mathf.Abs(parentLossy.x) > 1e-5f ? parentLossy.x : 1f);
+        float sy = (worldH / refH) / (Mathf.Abs(parentLossy.y) > 1e-5f ? parentLossy.y : 1f);
+        float sz = 0.001f / (Mathf.Abs(parentLossy.z) > 1e-5f ? parentLossy.z : 1f);
+        stageRootT.localScale = new Vector3(sx, sy, sz);
+
+        EditorUtility.SetDirty(stageRootT);
+        Debug.Log("[眠境音乐配置] 屏幕自动适配完成 | 命中屏幕: " + screenName +
+                  " | 尺寸: " + worldW.ToString("F2") + "m x " + worldH.ToString("F2") + "m" +
+                  " | 正面法线: " + frontNormal.ToString("F2"));
+        return true;
+    }
+
+    /// <summary>一键将舞台朝向水平翻转 180°（用于个别自定义 Mesh 法线反向的播放器屏幕）。</summary>
+    public static void FlipStageFacing180(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null) return;
+        Transform t = ctrl.transform;
+        Undo.RecordObject(t, "翻转歌词舞台朝向 180°");
+        // 将 4mm 偏移对称翻到另一侧并绕自身 Up 旋转 180°
+        t.position += t.forward * 0.008f;
+        t.Rotate(Vector3.up, 180f, Space.Self);
+        EditorUtility.SetDirty(t);
+        if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
+        Debug.Log("[眠境音乐配置] 已将歌词舞台朝向翻转 180°。");
+    }
+
+    private static bool TryDetectScreenGeometry(
+        GameObject targetRoot, GameObject ignoreSubtree,
+        out Vector3 center, out Vector3 frontNormal, out Vector3 screenUp,
+        out float worldW, out float worldH, out string screenName)
+    {
+        center = Vector3.zero;
+        frontNormal = -Vector3.forward;
+        screenUp = Vector3.up;
+        worldW = 0f;
+        worldH = 0f;
+        screenName = "";
+
+        float bestScore = -1f;
+        Vector3[] corners = new Vector3[4];
+
+        // 1) 优先查找面积最大的 RawImage 屏幕（VizVid / YamaPlayer / ProTV Canvas 屏幕）
+        RawImage[] rawImages = targetRoot.GetComponentsInChildren<RawImage>(true);
+        for (int i = 0; i < rawImages.Length; i++)
+        {
+            RawImage img = rawImages[i];
+            if (img == null || IsChildOf(img.transform, ignoreSubtree.transform)) continue;
+            img.rectTransform.GetWorldCorners(corners);
+            Vector3 rightVec = corners[3] - corners[0];
+            Vector3 upVec = corners[1] - corners[0];
+            float w = rightVec.magnitude;
+            float h = upVec.magnitude;
+            if (w < 0.15f || h < 0.1f) continue;
+
+            float score = w * h * NameScreenWeight(img.name);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                center = (corners[0] + corners[2]) * 0.5f;
+                frontNormal = -Vector3.Cross(rightVec, upVec).normalized;
+                screenUp = upVec.normalized;
+                worldW = w;
+                worldH = h;
+                screenName = img.name + " (RawImage)";
+            }
+        }
+
+        // 2) 查找 3D 屏幕 MeshRenderer（Quad / Plane / 自定义显示器网格）
+        MeshRenderer[] renderers = targetRoot.GetComponentsInChildren<MeshRenderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            MeshRenderer mr = renderers[i];
+            if (mr == null || IsChildOf(mr.transform, ignoreSubtree.transform)) continue;
+            MeshFilter mf = mr.GetComponent<MeshFilter>();
+            if (mf == null || mf.sharedMesh == null) continue;
+
+            Bounds localB = mf.sharedMesh.bounds;
+            Vector3 lossy = mr.transform.lossyScale;
+            float sx = Mathf.Abs(localB.size.x * lossy.x);
+            float sy = Mathf.Abs(localB.size.y * lossy.y);
+            float sz = Mathf.Abs(localB.size.z * lossy.z);
+
+            // 判断最薄的轴作为屏幕法线轴（Quad 为 Z 轴最薄，Plane 为 Y 轴最薄）
+            float w, h;
+            Vector3 localNormal, localUp;
+            if (sz <= sx && sz <= sy)
+            {
+                w = sx; h = sy;
+                localNormal = -Vector3.forward;
+                localUp = Vector3.up;
+            }
+            else if (sy <= sx && sy <= sz)
+            {
+                w = sx; h = sz;
+                localNormal = Vector3.up;
+                localUp = Vector3.forward;
+            }
+            else
+            {
+                w = sz; h = sy;
+                localNormal = Vector3.right;
+                localUp = Vector3.up;
+            }
+
+            if (w < 0.15f || h < 0.1f) continue;
+            float score = w * h * NameScreenWeight(mr.name);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                center = mr.transform.TransformPoint(localB.center);
+                bool flippedHandedness = (lossy.x * lossy.y * lossy.z) < 0f;
+                Vector3 n = mr.transform.TransformDirection(localNormal).normalized;
+                if (flippedHandedness) n = -n;
+                frontNormal = n;
+                screenUp = mr.transform.TransformDirection(localUp).normalized;
+                worldW = w;
+                worldH = h;
+                screenName = mr.name + " (MeshRenderer)";
+            }
+        }
+
+        return bestScore > 0f;
+    }
+
+    private static float NameScreenWeight(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return 1f;
+        string low = name.ToLowerInvariant();
+        if (low.Contains("screen") || low.Contains("display") || low.Contains("video") || low.Contains("monitor") || low.Contains("quad"))
+            return 2.5f;
+        if (low.Contains("icon") || low.Contains("btn") || low.Contains("button") || low.Contains("thumb"))
+            return 0.1f;
+        return 1f;
+    }
+
+    private static bool IsChildOf(Transform child, Transform parent)
+    {
+        if (child == null || parent == null) return false;
+        Transform cur = child;
+        while (cur != null)
+        {
+            if (cur == parent) return true;
+            cur = cur.parent;
+        }
+        return false;
+    }
+
+    /// <summary>排查常见适配与播放问题（反面/负缩放、未绑定播放器、音频静音、材质缺失等）。</summary>
+    public static string RunDiagnostics(SleepMusicLyricsController ctrl, out MessageType level)
+    {
+        level = MessageType.Info;
+        if (ctrl == null) { level = MessageType.Error; return "控制器为空"; }
+
+        StringBuilder sb = new StringBuilder();
+        int warnings = 0;
+
+        // 1) 检查底层播放器绑定
+        int validVp = 0;
+        if (ctrl.videoPlayers != null)
+        {
+            for (int i = 0; i < ctrl.videoPlayers.Length; i++)
+                if (ctrl.videoPlayers[i] != null) validVp++;
+        }
+        if (validVp == 0)
+        {
+            sb.AppendLine("• [严重] 未绑定底层 BaseVRCVideoPlayer，歌词将无法同步播放进度！请拖拽目标播放器到上方绑定区。");
+            warnings++;
+            level = MessageType.Error;
+        }
+
+        // 2) 检查控制器 URL 读取源
+        if (ctrl.playerController == null && ctrl.rawUdonPlayer == null && ctrl.urlInputField == null)
+        {
+            sb.AppendLine("• [提示] 未绑定播放器核心脚本或输入框，需由外部脚本调用 SetExternalUrl(VRCUrl) 推送歌曲链接。");
+            warnings++;
+            if (level == MessageType.Info) level = MessageType.Warning;
+        }
+
+        // 3) 检查负缩放导致的镜像/反面问题
+        Vector3 lossy = ctrl.transform.lossyScale;
+        if (lossy.x < 0f || lossy.y < 0f || lossy.z < 0f)
+        {
+            sb.AppendLine("• [警告] 检测到舞台存在负缩放 (" + lossy.ToString("F3") + ")，文字与封面将呈镜像或背面不可见！请点击「自动适配屏幕」或「翻转朝向 180°」。");
+            warnings++;
+            if (level == MessageType.Info) level = MessageType.Warning;
+        }
+
+        // 4) 检查目标播放器 AudioSource 静音/禁用
+        if (ctrl.playerController != null)
+        {
+            AudioSource[] audios = ctrl.playerController.transform.root.GetComponentsInChildren<AudioSource>(true);
+            if (audios.Length > 0)
+            {
+                bool allMuted = true;
+                for (int i = 0; i < audios.Length; i++)
+                {
+                    if (audios[i] != null && audios[i].enabled && !audios[i].mute && audios[i].volume > 0.01f)
+                    {
+                        allMuted = false;
+                        break;
+                    }
+                }
+                if (allMuted)
+                {
+                    sb.AppendLine("• [警告] 目标播放器所有 AudioSource 均处于静音/关闭状态，可能导致播放无声。");
+                    warnings++;
+                    if (level == MessageType.Info) level = MessageType.Warning;
+                }
+            }
+        }
+
+        // 5) 检查 GPU 材质与 RenderTexture
+        if (ctrl.bc1DecodeMaterial == null || ctrl.coverRenderTarget == null || ctrl.ambientBackdropMat == null || ctrl.albumCardMat == null)
+        {
+            sb.AppendLine("• [警告] 缺少 GPU 封面解码材质或 RT_MusicCover_512，封面与光晕背景将无法渲染。");
+            warnings++;
+            if (level == MessageType.Info) level = MessageType.Warning;
+        }
+
+        // 6) 检查音乐池烘焙
+        if (ctrl.musicSlotUrls == null || ctrl.musicSlotUrls.Length == 0)
+        {
+            sb.AppendLine("• [提示] 音乐池槽位尚未烘焙，请点击「一键替换域名并同步音乐池」。");
+            warnings++;
+            if (level == MessageType.Info) level = MessageType.Warning;
+        }
+
+        if (warnings == 0)
+        {
+            return "诊断通过：播放器绑定、屏幕朝向、GPU 材质与音乐池均正常（" + (ctrl.stageOnlyMode ? "纯歌词封面舞台模式" : "完整控制栏模式") + "）。";
+        }
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>在 Inspector / 设置窗口绘制「拖拽任意播放器到此处自动绑定」交互区。</summary>
@@ -394,12 +678,29 @@ public class SleepMusicLyricsControllerEditor : Editor
             "当前已烘焙槽位: " + (ctrl.musicSlotUrls != null ? ctrl.musicSlotUrls.Length : 0) + " 个",
             MessageType.Info);
 
+        MessageType diagType;
+        string diagMsg = SleepMusicConfigUtility.RunDiagnostics(ctrl, out diagType);
+        EditorGUILayout.HelpBox(diagMsg, diagType);
+
         SleepMusicConfigUtility.DrawPlayerDropArea(ctrl);
         EditorGUILayout.Space(2);
-        if (GUILayout.Button("一键自动绑定场景内任意播放器（VizVid / ProTV / Yama / 原生等）", GUILayout.Height(26)))
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("一键自动绑定场景任意播放器", GUILayout.Height(26)))
         {
             SleepMusicConfigUtility.AutoBindAnyPlayer(ctrl);
         }
+        if (GUILayout.Button("自动适配屏幕大小", GUILayout.Width(118), GUILayout.Height(26)))
+        {
+            GameObject targetGo = ctrl.playerController != null ? ctrl.playerController.transform.root.gameObject
+                : (ctrl.transform.parent != null ? ctrl.transform.parent.gameObject : null);
+            if (targetGo != null) SleepMusicConfigUtility.AutoFitToTargetScreen(ctrl, targetGo);
+            else EditorUtility.DisplayDialog("未指定目标播放器", "请先将目标播放器拖入上方绑定区，或将本舞台放到播放器物体下。", "确定");
+        }
+        if (GUILayout.Button("翻转 180°", GUILayout.Width(76), GUILayout.Height(26)))
+        {
+            SleepMusicConfigUtility.FlipStageFacing180(ctrl);
+        }
+        EditorGUILayout.EndHorizontal();
         EditorGUILayout.Space(2);
 
         EditorGUILayout.BeginHorizontal();
@@ -559,13 +860,30 @@ public class SleepMusicSettingsWindow : EditorWindow
 }
 
 
-/// <summary>快捷菜单：在场景层级中一键生成开箱即用的眠境音乐播放器。</summary>
+/// <summary>快捷菜单：在场景层级中一键生成纯歌词封面舞台或完整播放器。</summary>
 public static class SleepMusicPrefabMenu
 {
+    private const string StageOnlyPrefabPath = "Packages/com.miaobai.sleep-music-player/Prefabs/SleepMusicStage (Lyrics & Cover Only).prefab";
     private const string PackagePrefabPath = "Packages/com.miaobai.sleep-music-player/Prefabs/SleepMusicPlayer (All-in-One).prefab";
 
-    [MenuItem("GameObject/眠境音乐播放器/创建开箱即用播放器", false, 10)]
-    [MenuItem("Tools/眠境音乐播放器/在场景中创建播放器", false, 1)]
+    [MenuItem("GameObject/眠境音乐播放器/创建纯歌词与封面舞台（无控件栏，适配任意播放器）", false, 9)]
+    [MenuItem("Tools/眠境音乐播放器/创建纯歌词与封面舞台（无控件栏）", false, 0)]
+    public static void CreateStageOnlyInScene()
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(StageOnlyPrefabPath);
+        if (prefab == null)
+        {
+            EditorUtility.DisplayDialog("未找到预制体", "请确认包内纯舞台预制体存在：" + StageOnlyPrefabPath, "确定");
+            return;
+        }
+        GameObject inst = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+        Undo.RegisterCreatedObjectUndo(inst, "创建眠境纯歌词与封面舞台");
+        Selection.activeGameObject = inst;
+        Debug.Log("[眠境音乐播放器] 已创建纯歌词与封面舞台（无底部控件栏）。直接拖到任意播放器物体下成为子物体，或在 Inspector 拖拽目标播放器即可自动绑定！");
+    }
+
+    [MenuItem("GameObject/眠境音乐播放器/创建完整版播放器（含双排胶囊控件栏）", false, 10)]
+    [MenuItem("Tools/眠境音乐播放器/在场景中创建完整版播放器", false, 1)]
     public static void CreatePlayerInScene()
     {
         GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(PackagePrefabPath);
