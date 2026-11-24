@@ -1,13 +1,15 @@
 using System.Text;
-using JLChnToZ.VRC.VVMW;
 using UdonSharp;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 using VRC.SDK3.Components;
 using VRC.SDK3.Image;
 using VRC.SDK3.Rendering;
 using VRC.SDK3.StringLoading;
+using VRC.SDK3.Video.Components.Base;
 using VRC.SDKBase;
+using VRC.Udon;
 using VRC.Udon.Common.Interfaces;
 
 /// <summary>
@@ -88,12 +90,31 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     #endregion
 
-    #region 播放器与烘焙链接引用
+    #region 通用播放器与烘焙链接引用（支持任意 VRChat 视频播放器）
 
-    [Header("VizVid 播放器与输入框")]
-    public Core vvmwCore;
+    [Header("通用播放器绑定（支持 VizVid / ProTV / Yama / IWsync / USharpVideo / 原生播放器）")]
+    [Tooltip("可选：场景中任意播放器的核心控制脚本（UdonSharpBehaviour），用于自动读取当前播放链接与缓冲状态")]
+    [FormerlySerializedAs("vvmwCore")]
+    public UdonSharpBehaviour playerController;
+
+    [Tooltip("可选：若使用纯 Udon Graph 播放器，可拖入其 UdonBehaviour")]
+    public UdonBehaviour rawUdonPlayer;
+
+    [Tooltip("推荐：拖入播放器底层的 VRCAVProVideoPlayer / VRCUnityVideoPlayer（可点击上方一键自动绑定）")]
+    public BaseVRCVideoPlayer[] videoPlayers;
+
+    [Tooltip("可选：自定义播放器中保存当前 VRCUrl 的 Udon 变量名（留空则自动兼容主流播放器）")]
+    public string customUrlVarName = "";
+
+    [Header("输入框与音乐池切歌桥接（可选）")]
     public VRCUrlInputField urlInputField;
     public GameObject urlInputTextObject;
+
+    [Tooltip("可选：音乐池切歌时要触发的播放器提交目标 UdonBehaviour（留空则直接调用底层 VideoPlayer.PlayURL）")]
+    public UdonBehaviour playerSubmitTarget;
+
+    [Tooltip("可选：音乐池切歌时在提交目标上触发的自定义事件名（例如 OnUrlInput / _ChangeMedia / OnURLChanged）")]
+    public string playerSubmitEvent = "";
 
     [Header("已烘焙的 VRCUrl 池（由上方设置一键生成）")]
     public VRCUrl fixedInputPrefix;
@@ -142,6 +163,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private IVRCImageDownload _pendingImage;
 
     private string _lastPlayedUrl = "";
+    private VRCUrl _manualSubmittedUrl;
     private string _pendingStringUrl = "";
     private bool _pendingIsPollOrSubmit;
     private bool _hasMusicLyrics;
@@ -333,16 +355,20 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             SetCoverBlend(_coverBlend);
         }
 
-        // 严格跟随当前玩家本地播放位置与播放状态（支持中途进图、拖动进度条、暂停与缓冲提示）
-        if (_hasMusicLyrics && vvmwCore != null && musicStageRoot != null && musicStageRoot.activeSelf)
+        // 严格跟随当前玩家本地播放位置与播放状态（支持任意底层播放器、中途进图、拖动进度条、暂停与缓冲提示）
+        if (_hasMusicLyrics && HasAnyPlayerBound() && musicStageRoot != null && musicStageRoot.activeSelf)
         {
-            if (vvmwCore.IsLoading && !vvmwCore.IsPlaying)
+            bool playing = IsAnyPlayerPlaying();
+            bool loading = IsAnyPlayerLoading();
+            bool paused = IsAnyPlayerPaused();
+
+            if (loading && !playing)
             {
                 SetStatus("正在缓冲同步当前进度...");
             }
-            else if (vvmwCore.IsPaused)
+            else if (paused)
             {
-                float pausedTime = vvmwCore.Time;
+                float pausedTime = GetPlaybackTime();
                 if (Mathf.Abs(pausedTime - _lastLocalTime) > 0.05f)
                 {
                     _lastLocalTime = pausedTime;
@@ -351,7 +377,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             }
             else
             {
-                float localTime = vvmwCore.Time;
+                float localTime = GetPlaybackTime();
                 _lastLocalTime = localTime;
                 if (!_isInstrumentalMode) SetStatus("");
                 UpdateLyrics(localTime);
@@ -362,9 +388,195 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     #endregion
 
+    #region 通用播放器适配层（零第三方编译依赖）
+
+    private bool HasAnyPlayerBound()
+    {
+        if (playerController != null || rawUdonPlayer != null) return true;
+        if (videoPlayers != null)
+        {
+            for (int i = 0; i < videoPlayers.Length; i++)
+            {
+                if (videoPlayers[i] != null) return true;
+            }
+        }
+        return false;
+    }
+
+    private BaseVRCVideoPlayer GetActiveVideoPlayer()
+    {
+        if (videoPlayers == null) return null;
+        BaseVRCVideoPlayer readyFallback = null;
+        for (int i = 0; i < videoPlayers.Length; i++)
+        {
+            BaseVRCVideoPlayer vp = videoPlayers[i];
+            if (vp == null) continue;
+            if (vp.IsPlaying) return vp;
+            if (readyFallback == null && vp.IsReady) readyFallback = vp;
+        }
+        return readyFallback;
+    }
+
+    private object ReadPlayerVar(string varName)
+    {
+        if (string.IsNullOrEmpty(varName)) return null;
+        if (playerController != null)
+        {
+            object v = playerController.GetProgramVariable(varName);
+            if (v != null) return v;
+        }
+        if (rawUdonPlayer != null)
+        {
+            object v = rawUdonPlayer.GetProgramVariable(varName);
+            if (v != null) return v;
+        }
+        return null;
+    }
+
+    private bool ReadPlayerBool(string varName)
+    {
+        object v = ReadPlayerVar(varName);
+        return v != null && v.GetType() == typeof(bool) && (bool)v;
+    }
+
+    private float ReadPlayerFloat(string varName, float fallback)
+    {
+        object v = ReadPlayerVar(varName);
+        if (v != null && v.GetType() == typeof(float)) return (float)v;
+        return fallback;
+    }
+
+    private VRCUrl ReadPlayerUrlVar(string varName)
+    {
+        object v = ReadPlayerVar(varName);
+        if (v != null && v.GetType() == typeof(VRCUrl))
+        {
+            VRCUrl u = (VRCUrl)v;
+            if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        }
+        return null;
+    }
+
+    private bool IsAnyPlayerPlaying()
+    {
+        BaseVRCVideoPlayer vp = GetActiveVideoPlayer();
+        if (vp != null && vp.IsPlaying) return true;
+        return ReadPlayerBool("isPlaying") || ReadPlayerBool("_isPlaying") || ReadPlayerBool("playing");
+    }
+
+    private bool IsAnyPlayerReady()
+    {
+        BaseVRCVideoPlayer vp = GetActiveVideoPlayer();
+        if (vp != null && vp.IsReady) return true;
+        return ReadPlayerBool("isReady") || ReadPlayerBool("_isReady");
+    }
+
+    private bool IsAnyPlayerLoading()
+    {
+        return ReadPlayerBool("isLoading") || ReadPlayerBool("_isLoading") || ReadPlayerBool("loading");
+    }
+
+    private bool IsAnyPlayerPaused()
+    {
+        BaseVRCVideoPlayer vp = GetActiveVideoPlayer();
+        if (vp != null)
+        {
+            if (vp.IsPlaying) return false;
+            if (vp.IsReady && vp.GetTime() > 0.01f) return true;
+        }
+        return ReadPlayerBool("isPaused") || ReadPlayerBool("paused") || ReadPlayerBool("_paused");
+    }
+
+    private float GetPlaybackTime()
+    {
+        BaseVRCVideoPlayer vp = GetActiveVideoPlayer();
+        if (vp != null) return vp.GetTime();
+
+        float t = ReadPlayerFloat("time", -1f);
+        if (t >= 0f) return t;
+        t = ReadPlayerFloat("currentTime", -1f);
+        if (t >= 0f) return t;
+        t = ReadPlayerFloat("videoTime", -1f);
+        if (t >= 0f) return t;
+        t = ReadPlayerFloat("_time", -1f);
+        return t >= 0f ? t : 0f;
+    }
+
+    // 兼容主流 VRChat 播放器（VizVid / ProTV / YamaPlayer / USharpVideo / IWsync / 自定义）自动读取当前 VRCUrl
+    private VRCUrl GetCurrentPlayerUrl()
+    {
+        if (!string.IsNullOrEmpty(customUrlVarName))
+        {
+            VRCUrl custom = ReadPlayerUrlVar(customUrlVarName);
+            if (!VRCUrl.IsNullOrEmpty(custom)) return custom;
+        }
+
+        VRCUrl u = ReadPlayerUrlVar("localUrl");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("url");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("syncedURL");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("_syncedUrl");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("syncedUrl");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("lastUrl");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
+
+        if (!VRCUrl.IsNullOrEmpty(_manualSubmittedUrl)) return _manualSubmittedUrl;
+        return VRCUrl.Empty;
+    }
+
+    // 通用切歌：优先通过已绑定的播放器输入框/事件提交，否则直接调用底层 BaseVRCVideoPlayer.PlayURL
+    private bool PlayTargetUrl(VRCUrl targetUrl)
+    {
+        if (VRCUrl.IsNullOrEmpty(targetUrl)) return false;
+        _manualSubmittedUrl = targetUrl;
+
+        if (playerSubmitTarget != null && !string.IsNullOrEmpty(playerSubmitEvent))
+        {
+            if (urlInputField != null) urlInputField.SetUrl(targetUrl);
+            playerSubmitTarget.SendCustomEvent(playerSubmitEvent);
+            return true;
+        }
+
+        if (videoPlayers != null)
+        {
+            for (int i = 0; i < videoPlayers.Length; i++)
+            {
+                if (videoPlayers[i] != null)
+                {
+                    videoPlayers[i].PlayURL(targetUrl);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>供外部自定义播放器主动推送当前播放的 VRCUrl（无需依赖变量反射）。</summary>
+    public void SetExternalUrl(VRCUrl url)
+    {
+        _manualSubmittedUrl = url;
+        if (VRCUrl.IsNullOrEmpty(url))
+        {
+            ClearMusicStage();
+            return;
+        }
+        string urlText = url.Get();
+        if (urlText != _lastPlayedUrl)
+        {
+            _lastPlayedUrl = urlText;
+            TryActivateMusicStage(url, urlText);
+        }
+    }
+
+    #endregion
+
     #region 播放器监听与网络拉取
 
-    /// <summary>输入框提交回调：解析并拉取提交的单曲链接。</summary>
+    /// <summary>输入框提交回调：捕获用户输入的链接并触发单曲解析或音乐舞台激活。</summary>
     public void OnUrlInputSubmitted()
     {
         if (urlInputField == null) return;
@@ -374,6 +586,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         string url = typed.Get();
         if (string.IsNullOrEmpty(url)) return;
 
+        _manualSubmittedUrl = typed;
         if (url.Contains(PathSubmitMarker) && url.Contains(QueryUrlKey) && !url.EndsWith(QueryUrlKey))
         {
             StartStringFetch(typed, true, "正在解析单曲...");
@@ -391,7 +604,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private void UpdateInputVisibility()
     {
         if (urlInputField == null) return;
-        bool busy = vvmwCore != null && (vvmwCore.IsLoading || vvmwCore.IsPlaying || vvmwCore.IsPaused);
+        bool busy = HasAnyPlayerBound() && (IsAnyPlayerLoading() || IsAnyPlayerPlaying() || IsAnyPlayerPaused());
         bool focused = urlInputField.isFocused;
 
         if (urlInputTextObject != null)
@@ -414,20 +627,20 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         }
     }
 
-    // 监听 VizVid 播放状态与链接切换
+    // 监听任意播放器播放状态与链接切换
     private void PollPlayerState()
     {
-        if (vvmwCore == null) return;
+        if (!HasAnyPlayerBound()) return;
 
-        bool stopped = !vvmwCore.IsLoading && !vvmwCore.IsPlaying && !vvmwCore.IsPaused && !vvmwCore.IsReady;
+        bool stopped = !IsAnyPlayerLoading() && !IsAnyPlayerPlaying() && !IsAnyPlayerPaused() && !IsAnyPlayerReady();
         if (stopped)
         {
             if (_hasMusicLyrics || _hasCover || !string.IsNullOrEmpty(_lastPlayedUrl)) ClearMusicStage();
+            _manualSubmittedUrl = VRCUrl.Empty;
             return;
         }
 
-        VRCUrl currentUrl = vvmwCore.Url;
-        if (VRCUrl.IsNullOrEmpty(currentUrl)) currentUrl = vvmwCore.LastUrl;
+        VRCUrl currentUrl = GetCurrentPlayerUrl();
         string urlText = VRCUrl.IsNullOrEmpty(currentUrl) ? "" : currentUrl.Get();
         if (urlText == _lastPlayedUrl) return;
 
@@ -502,12 +715,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         {
             _pendingIsPollOrSubmit = false;
             int slot = ExtractFirstSongSlot(json);
-            if (slot >= 0 && musicSlotUrls != null && slot < musicSlotUrls.Length && vvmwCore != null)
+            if (slot >= 0 && musicSlotUrls != null && slot < musicSlotUrls.Length && HasAnyPlayerBound())
             {
                 LogInfo("拉取成功", "音乐池同步完成 | 耗时 " + FormatMs(fetchMs) + " | 命中槽位 #" + slot);
                 SetStatus("正在播放音乐 #" + slot);
                 VRCUrl targetUrl = musicSlotUrls[slot];
-                vvmwCore.PlayUrl(targetUrl, vvmwCore.GetSuitablePlayerType(targetUrl));
+                PlayTargetUrl(targetUrl);
             }
             else
             {
@@ -566,7 +779,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             " | 歌词 " + _lyricCount + " 行 / 翻译 " + _transCount + " 行" +
             " | 逐字模式: " + (_hasWordTimings ? "真逐字 (YRC/KRC)" : "智能拟真 (LRC)"));
 
-        UpdateLyrics(vvmwCore != null ? vvmwCore.Time : 0f);
+        UpdateLyrics(GetPlaybackTime());
     }
 
     public override void OnStringLoadError(IVRCStringDownload result)

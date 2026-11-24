@@ -1,8 +1,14 @@
+using System.Collections.Generic;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UdonSharp;
 using UdonSharpEditor;
+using VRC.SDK3.Components;
+using VRC.SDK3.Video.Components.Base;
 using VRC.SDKBase;
+using VRC.Udon;
 
 /// <summary>
 /// 眠境音乐池配置核心逻辑：负责按模板一键生成并同步所有 VRCUrl 到 Udon 组件与输入框。
@@ -91,6 +97,151 @@ public static class SleepMusicConfigUtility
         ctrl.coverPathTemplate = DefaultCoverPath;
         ApplyAndSync(ctrl);
     }
+
+    /// <summary>
+    /// 一键自动扫描并绑定场景中任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）。
+    /// </summary>
+    public static void AutoBindAnyPlayer(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null) return;
+        Undo.RecordObject(ctrl, "一键自动绑定任意视频播放器");
+
+        // 1) 自动发现主流或自定义 UdonSharp 播放器核心脚本
+        if (ctrl.playerController == null)
+        {
+            ctrl.playerController = FindBestPlayerController(ctrl);
+        }
+
+        // 2) 自动收集底层 BaseVRCVideoPlayer（优先从已绑定控制器子树查找，否则全场景收集）
+        List<BaseVRCVideoPlayer> foundPlayers = new List<BaseVRCVideoPlayer>();
+        if (ctrl.playerController != null)
+        {
+            foundPlayers.AddRange(ctrl.playerController.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
+            if (foundPlayers.Count == 0 && ctrl.playerController.transform.root != null)
+            {
+                foundPlayers.AddRange(ctrl.playerController.transform.root.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
+            }
+        }
+        if (foundPlayers.Count == 0)
+        {
+            foundPlayers.AddRange(Object.FindObjectsOfType<BaseVRCVideoPlayer>(true));
+        }
+        ctrl.videoPlayers = foundPlayers.ToArray();
+
+        // 3) 自动绑定场景中的 VRCUrlInputField（若尚未绑定）
+        if (ctrl.urlInputField == null)
+        {
+            if (ctrl.playerController != null && ctrl.playerController.transform.root != null)
+            {
+                ctrl.urlInputField = ctrl.playerController.transform.root.GetComponentInChildren<VRCUrlInputField>(true);
+            }
+            if (ctrl.urlInputField == null)
+            {
+                ctrl.urlInputField = Object.FindObjectOfType<VRCUrlInputField>(true);
+            }
+        }
+
+        // 4) 自动从输入框的 onEndEdit 持久监听中提取原播放器的提交目标与事件名（用于音乐池自动切歌）
+        if (ctrl.urlInputField != null && (ctrl.playerSubmitTarget == null || string.IsNullOrEmpty(ctrl.playerSubmitEvent)))
+        {
+            TryExtractSubmitEvent(ctrl.urlInputField, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
+            if (submitTarget != null && !string.IsNullOrEmpty(submitEvent))
+            {
+                ctrl.playerSubmitTarget = submitTarget;
+                ctrl.playerSubmitEvent = submitEvent;
+            }
+        }
+
+        UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
+        EditorUtility.SetDirty(ctrl);
+        if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
+
+        string ctrlName = ctrl.playerController != null ? ctrl.playerController.GetType().Name + " (" + ctrl.playerController.name + ")" : "纯底层 VRCVideoPlayer 模式";
+        Debug.Log("[眠境音乐配置] 自动绑定播放器完成 | 控制器: " + ctrlName +
+                  " | 底层 VideoPlayer: " + (ctrl.videoPlayers != null ? ctrl.videoPlayers.Length : 0) + " 个" +
+                  " | 输入框: " + (ctrl.urlInputField != null ? ctrl.urlInputField.name : "无") +
+                  " | 切歌事件: " + (string.IsNullOrEmpty(ctrl.playerSubmitEvent) ? "直调 PlayURL" : ctrl.playerSubmitEvent));
+    }
+
+    private static UdonSharpBehaviour FindBestPlayerController(SleepMusicLyricsController self)
+    {
+        string[] preferredNames = { "Core", "TVManager", "YamaPlayerController", "YamaPlayer", "USharpVideoPlayer", "VideoCore", "SyncVideoPlayer" };
+        UdonSharpBehaviour[] all = Object.FindObjectsOfType<UdonSharpBehaviour>(true);
+        UdonSharpBehaviour fallback = null;
+
+        for (int i = 0; i < all.Length; i++)
+        {
+            UdonSharpBehaviour b = all[i];
+            if (b == null || b == self || b is SleepMusicLyricsController || b is SleepPlayerUIController) continue;
+
+            string typeName = b.GetType().Name;
+            for (int p = 0; p < preferredNames.Length; p++)
+            {
+                if (typeName == preferredNames[p]) return b;
+            }
+
+            if (fallback == null && HasUrlField(b.GetType()))
+            {
+                fallback = b;
+            }
+        }
+        return fallback;
+    }
+
+    private static bool HasUrlField(System.Type t)
+    {
+        BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        FieldInfo[] fields = t.GetFields(flags);
+        for (int i = 0; i < fields.Length; i++)
+        {
+            if (fields[i].FieldType == typeof(VRCUrl)) return true;
+        }
+        return false;
+    }
+
+    private static void TryExtractSubmitEvent(VRCUrlInputField field, SleepMusicLyricsController self, out UdonBehaviour target, out string eventName)
+    {
+        target = null;
+        eventName = "";
+        UdonBehaviour selfUdon = UdonSharpEditorUtility.GetBackingUdonBehaviour(self);
+
+        SerializedObject so = new SerializedObject(field);
+        SerializedProperty calls = so.FindProperty("m_OnEndEdit.m_PersistentCalls.m_Calls");
+        if (calls == null || !calls.isArray) return;
+
+        for (int i = 0; i < calls.arraySize; i++)
+        {
+            SerializedProperty call = calls.GetArrayElementAtIndex(i);
+            Object obj = call.FindPropertyRelative("m_Target")?.objectReferenceValue;
+            string method = call.FindPropertyRelative("m_MethodName")?.stringValue;
+            string strArg = call.FindPropertyRelative("m_Arguments.m_StringArgument")?.stringValue;
+
+            if (obj is UdonBehaviour ub && ub != selfUdon && method == "SendCustomEvent" && !string.IsNullOrEmpty(strArg))
+            {
+                target = ub;
+                eventName = strArg;
+                return;
+            }
+        }
+    }
+
+    /// <summary>生成当前播放器绑定状态摘要文本。</summary>
+    public static string GetBindingSummary(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null) return "未绑定";
+        int vpCount = 0;
+        if (ctrl.videoPlayers != null)
+        {
+            for (int i = 0; i < ctrl.videoPlayers.Length; i++)
+            {
+                if (ctrl.videoPlayers[i] != null) vpCount++;
+            }
+        }
+        string ctrlText = ctrl.playerController != null
+            ? ctrl.playerController.GetType().Name
+            : (ctrl.rawUdonPlayer != null ? "UdonBehaviour (" + ctrl.rawUdonPlayer.name + ")" : "未指定（仅底层模式）");
+        return "控制器: " + ctrlText + " | 底层播放器: " + vpCount + " 个";
+    }
 }
 
 /// <summary>
@@ -114,12 +265,19 @@ public class SleepMusicLyricsControllerEditor : Editor
         string previewCover = SleepMusicConfigUtility.BuildUrl(ctrl.apiDomain, ctrl.coverPathTemplate, ctrl.worldId, ctrl.poolName, 0);
 
         EditorGUILayout.HelpBox(
+            "播放器绑定: " + SleepMusicConfigUtility.GetBindingSummary(ctrl) + "\n" +
             "直链前缀: " + previewDirect + "\n" +
             "轮询接口: " + previewPoll + "\n" +
             "槽位 #0 : " + previewSlot + "\n" +
             "封面 #0 : " + previewCover + "\n" +
             "当前已烘焙槽位: " + (ctrl.musicSlotUrls != null ? ctrl.musicSlotUrls.Length : 0) + " 个",
             MessageType.Info);
+
+        if (GUILayout.Button("一键自动绑定场景内任意播放器（VizVid / ProTV / Yama / 原生等）", GUILayout.Height(28)))
+        {
+            SleepMusicConfigUtility.AutoBindAnyPlayer(ctrl);
+        }
+        EditorGUILayout.Space(2);
 
         EditorGUILayout.BeginHorizontal();
         if (GUILayout.Button("一键替换域名并同步音乐池", GUILayout.Height(30)))
@@ -149,6 +307,18 @@ public class SleepMusicSettingsWindow : EditorWindow
 {
     private SleepMusicLyricsController _target;
     private Vector2 _scroll;
+
+    [MenuItem("Tools/眠境音乐播放器/一键自动绑定场景任意播放器", false, 11)]
+    public static void AutoBindCurrentScenePlayer()
+    {
+        SleepMusicLyricsController ctrl = Object.FindObjectOfType<SleepMusicLyricsController>(true);
+        if (ctrl == null)
+        {
+            EditorUtility.DisplayDialog("未找到控制器", "当前场景未找到 SleepMusicLyricsController。", "确定");
+            return;
+        }
+        SleepMusicConfigUtility.AutoBindAnyPlayer(ctrl);
+    }
 
     [MenuItem("Tools/眠境音乐播放器/接口与音乐池一键配置", false, 10)]
     public static void OpenWindow()
@@ -243,6 +413,11 @@ public class SleepMusicSettingsWindow : EditorWindow
             MessageType.None);
 
         EditorGUILayout.Space(6);
+        if (GUILayout.Button("一键自动绑定场景内任意播放器（VizVid / ProTV / Yama / 原生等）", GUILayout.Height(30)))
+        {
+            SleepMusicConfigUtility.AutoBindAnyPlayer(_target);
+        }
+        EditorGUILayout.Space(4);
         EditorGUILayout.BeginHorizontal();
         if (GUILayout.Button("一键替换并同步到场景", GUILayout.Height(34)))
         {
