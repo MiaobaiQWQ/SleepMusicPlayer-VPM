@@ -16,6 +16,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private const string LogPrefix = "[眠境弹幕GPU]";
     private const string PropClock = "_DanmakuClock";
     private const string PropSlotAnim = "_SlotAnim";
+    private const string PropClipRect = "_ClipRect";
 
     private const int MaxDanmakuItems = 10000;
     private const int MaxGpuSlots = 80;
@@ -23,8 +24,8 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private const int ScrollLaneCount = 12;
     private const int FixedLaneCount = 4;
     private const float FixedDurationSec = 4.0f;
-    private const float CanvasHalfW = 960f;
-    private const float CanvasHalfH = 540f;
+    private const float DefaultHalfW = 960f;
+    private const float DefaultHalfH = 540f;
     private const float SeekJumpThresholdSec = 1.5f;
     private const float SlotZStep = 0.05f;
 
@@ -102,6 +103,10 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private float[] _topLaneFreeAt = new float[FixedLaneCount];
     private float[] _bottomLaneFreeAt = new float[FixedLaneCount];
 
+    private float _canvasHalfW = DefaultHalfW;
+    private float _canvasHalfH = DefaultHalfH;
+    private int _spawnedTotalCount;
+
     public bool HasDanmaku => _count > 0 || _isParsing;
     public int LoadedCount => _count;
 
@@ -119,6 +124,27 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     {
         if (_poolInitialized) return;
         _poolInitialized = true;
+
+        // 动态读取当前叠加层所在画布的实际宽高与边界，确保适配任意尺寸 Canvas 且绝不被 _ClipRect 误裁
+        RectTransform overlayRt = overlayRoot != null ? overlayRoot.GetComponent<RectTransform>() : GetComponent<RectTransform>();
+        if (overlayRt != null)
+        {
+            Vector3 op = overlayRt.anchoredPosition3D;
+            if (Mathf.Abs(op.z) > 0.0001f)
+            {
+                overlayRt.anchoredPosition3D = new Vector3(op.x, op.y, 0f);
+            }
+            Rect r = overlayRt.rect;
+            if (r.width > 100f && r.height > 100f)
+            {
+                _canvasHalfW = r.width * 0.5f;
+                _canvasHalfH = r.height * 0.5f;
+            }
+        }
+        if (danmakuGpuMaterial != null)
+        {
+            danmakuGpuMaterial.SetVector(PropClipRect, new Vector4(-_canvasHalfW, -_canvasHalfH, _canvasHalfW, _canvasHalfH));
+        }
 
         int n = danmakuPool != null ? Mathf.Min(danmakuPool.Length, MaxGpuSlots) : 0;
         _slotRects = new RectTransform[n];
@@ -177,6 +203,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         _parsingPos = 0;
         _lastSyncTime = -10f;
         _gpuClock = 0f;
+        _spawnedTotalCount = 0;
         HideAllSlots();
         if (overlayRoot != null) overlayRoot.SetActive(false);
     }
@@ -424,13 +451,13 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             int lane = AllocateScrollLane();
             if (lane < 0) return;
 
-            float usableHeight = (CanvasHalfH * 2f - 40f) * Mathf.Clamp(displayAreaRatio, 0.25f, 1.0f);
+            float usableHeight = (_canvasHalfH * 2f - 40f) * Mathf.Clamp(displayAreaRatio, 0.25f, 1.0f);
             float laneH = usableHeight / ScrollLaneCount;
-            float y = CanvasHalfH - 24f - laneH * (lane + 0.5f);
+            float y = _canvasHalfH - 24f - laneH * (lane + 0.5f);
 
             float dur = Mathf.Max(3.0f, scrollDuration);
-            float startX = CanvasHalfW + width * 0.5f + 24f;
-            float endX = -CanvasHalfW - width * 0.5f - 24f;
+            float startX = _canvasHalfW + width * 0.5f + 24f;
+            float endX = -_canvasHalfW - width * 0.5f - 24f;
             float speed = (startX - endX) / dur;
 
             _slotActive[slot] = true;
@@ -456,7 +483,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             int lane = AllocateFixedLane(_topLaneFreeAt, localTime);
             if (lane < 0) return;
 
-            float y = CanvasHalfH - 36f - lane * 56f;
+            float y = _canvasHalfH - 36f - lane * 56f;
             _slotActive[slot] = true;
             _slotType[slot] = 5;
             _slotLane[slot] = lane;
@@ -477,7 +504,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             int lane = AllocateFixedLane(_bottomLaneFreeAt, localTime);
             if (lane < 0) return;
 
-            float y = -CanvasHalfH + 46f + lane * 56f;
+            float y = -_canvasHalfH + 46f + lane * 56f;
             _slotActive[slot] = true;
             _slotType[slot] = 4;
             _slotLane[slot] = lane;
@@ -492,6 +519,12 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
 
             txt.alignment = TextAnchor.MiddleCenter;
             txt.gameObject.SetActive(true);
+        }
+
+        _spawnedTotalCount++;
+        if (_spawnedTotalCount == 1 && enableDebugLog)
+        {
+            Debug.Log(LogPrefix + " 首条弹幕已上屏渲染 | 画布半尺寸: " + _canvasHalfW.ToString("F0") + "x" + _canvasHalfH.ToString("F0") + " | 内容: " + text);
         }
     }
 
@@ -521,7 +554,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             float elapsed = _gpuClock - _slotSpawnClock[owner];
             float curX = _slotStartX[owner] - _slotSpeed[owner] * elapsed;
             float rightEdge = curX + _slotWidth[owner] * 0.5f;
-            if (rightEdge < CanvasHalfW - 48f) return lane;
+            if (rightEdge < _canvasHalfW - 48f) return lane;
         }
         return -1;
     }

@@ -535,6 +535,8 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         VRCUrl u = ReadPlayerUrlVar("localUrl");
         if (!VRCUrl.IsNullOrEmpty(u)) return u;
+        u = ReadPlayerUrlVar("loadingUrl");
+        if (!VRCUrl.IsNullOrEmpty(u)) return u;
         u = ReadPlayerUrlVar("url");
         if (!VRCUrl.IsNullOrEmpty(u)) return u;
         u = ReadPlayerUrlVar("syncedURL");
@@ -686,10 +688,10 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         bool isDirect = urlText.Contains(PathDirectMarker);
         bool isVideo = IsKnownVideoUrl(urlText);
 
-        // 视频弹幕分支：绝不激活不透明音乐封面舞台，仅拉取弹幕 JSON
+        // 视频弹幕分支：绝不激活不透明音乐封面舞台，仅拉取弹幕 JSON（保留 _lastPlayedUrl 防止 0.15s 循环重拉清空弹幕！）
         if (isDanmakuApi || (isDirect && isVideo))
         {
-            ClearMusicStage();
+            HideMusicStageOnly();
             if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
             {
                 _pendingIsDanmaku = true;
@@ -701,7 +703,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         if (isVideo)
         {
-            ClearMusicStage();
+            HideMusicStageOnly();
             return;
         }
 
@@ -711,7 +713,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         if (!isDirect && !isSlot)
         {
-            ClearMusicStage();
+            HideMusicStageOnly();
             return;
         }
 
@@ -777,11 +779,11 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         if (_pendingIsDanmaku || (hasCommentsField && json.IndexOf(KeyLyrics) < 0))
         {
             _pendingIsDanmaku = false;
-            ClearMusicStage();
+            HideMusicStageOnly();
             if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
             {
                 int loaded = danmakuOverlay.LoadFromJson(json);
-                LogInfo("弹幕就绪", "网络耗时 " + FormatMs(fetchMs) + " | 已加载 " + loaded + " 条弹幕");
+                LogInfo("弹幕就绪", "网络耗时 " + FormatMs(fetchMs) + " | 首批加载 " + loaded + " 条弹幕");
             }
             return;
         }
@@ -796,7 +798,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         bool isMusic = IsMusicPlatform(platform);
         if (!isMusic && _lyricCount <= 0)
         {
-            ClearMusicStage();
+            HideMusicStageOnly();
             LogInfo("视频模式", "识别为非音乐视频 (" + (string.IsNullOrEmpty(platform) ? "video" : platform) + ")，已隐藏音乐舞台 | 耗时 " + FormatMs(fetchMs));
             return;
         }
@@ -1280,9 +1282,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         return result;
     }
 
-    private void ClearMusicStage()
+    // 仅隐藏并清空音乐舞台（保留 _lastPlayedUrl，供视频/弹幕模式使用，避免 PollPlayerState 每 0.15s 重复触发清空弹幕）
+    private void HideMusicStageOnly()
     {
-        _lastPlayedUrl = "";
         _hasMusicLyrics = false;
         _hasCover = false;
         _coverBlend = 0f;
@@ -1296,6 +1298,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             _pendingImage = null;
         }
         if (musicStageRoot != null) musicStageRoot.SetActive(false);
+    }
+
+    private void ClearMusicStage()
+    {
+        _lastPlayedUrl = "";
+        HideMusicStageOnly();
     }
 
     private void SetCoverBlend(float value)
