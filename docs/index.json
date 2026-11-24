@@ -181,6 +181,27 @@
           },
           "url": "https://github.com/MiaobaiQWQ/SleepMusicPlayer-VPM/releases/download/v1.3.3/com.miaobai.sleep-music-player-1.3.3.zip",
           "zipSHA256": "9e73b66129251fd7c3fa997860dcfcc75b7c35860fbcc23cecfe5f83f1ab2fbd"
+        },
+        "1.4.0": {
+          "name": "com.miaobai.sleep-music-player",
+          "displayName": "SleepMusic Player (眠境音乐歌词播放器)",
+          "version": "1.4.0",
+          "unity": "2022.3",
+          "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
+          "license": "MIT",
+          "vrchatVersion": "2022.3.22",
+          "documentationUrl": "https://github.com/MiaobaiQWQ/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/MiaobaiQWQ/SleepMusicPlayer-VPM/releases",
+          "hideInEditor": false,
+          "vpmDependencies": {
+            "com.vrchat.worlds": ">=3.7.0"
+          },
+          "author": {
+            "name": "MiaobaiQWQ",
+            "url": "https://github.com/MiaobaiQWQ"
+          },
+          "url": "https://github.com/MiaobaiQWQ/SleepMusicPlayer-VPM/releases/download/v1.4.0/com.miaobai.sleep-music-player-1.4.0.zip",
+          "zipSHA256": "859f9bc6d7114ed519d13cbf3bca2e147dccc5fcbfdbd81a39cd7a37c50534e4"
         }
       }
     }
