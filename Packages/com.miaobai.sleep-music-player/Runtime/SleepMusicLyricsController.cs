@@ -254,7 +254,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         if (musicStageRoot != null) musicStageRoot.SetActive(false);
         if (controlBarRoot != null && (hideControlBar || stageOnlyMode)) controlBarRoot.SetActive(false);
         SetCoverBlend(0f);
-        if (!stageOnlyMode) RestoreFixedPrefixIfEmpty();
+        RestoreFixedPrefixIfEmpty();
     }
 
     // 缓存 5 行歌词与翻译的初始位置与透明度，供切行滚动动画复用
