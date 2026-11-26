@@ -2,7 +2,7 @@
 
 **支持任意 VRChat 视频播放器（零第三方依赖）** 的开箱即用 GPU 音乐歌词舞台 VPM 扩展包——**无需使用底部控件栏**，可将纯歌词与封面舞台直接拖到任意播放器屏幕上自动适配大小与朝向！
 
-![纯歌词与封面舞台实机渲染预览](docs/preview-stage.png)
+![纯歌词与封面舞台实机渲染预览](docs/preview-stage.gif)
 
 ## 核心特性
 - **纯歌词与封面舞台（无底部控件栏，适配任意播放器）**：内置独立 `SleepMusicStage (Lyrics & Cover Only).prefab`，仅负责 **GPU BC1 封面解码、流体光晕氛围背景与逐字暖金歌词展示**，不接管也不遮挡原播放器的控制栏。
@@ -15,7 +15,7 @@
 
 ## 快速使用（VCC / ALCOM）
 1. 在 VCC 或 ALCOM 中添加本仓库的 VPM Listing 地址：
-   - 本仓库 VPM 地址：`https://miaobaiqwq.github.io/SleepMusicPlayer-VPM/index.json`
+   - 本仓库 VPM 地址：`https://xiaoxnmv.github.io/SleepMusicPlayer-VPM/index.json`
    - 依赖：仅 `com.vrchat.worlds >= 3.7.0`（无需安装任何特定视频播放器！）
 2. 在项目里安装 **SleepMusic Player (眠境音乐歌词播放器)**。
 3. 在 Unity 场景中右键 **`GameObject -> 眠境音乐播放器 -> 创建开箱即用播放器`**（或直接拖入 `Packages/com.miaobai.sleep-music-player/Prefabs/SleepMusicPlayer (All-in-One).prefab`）。
