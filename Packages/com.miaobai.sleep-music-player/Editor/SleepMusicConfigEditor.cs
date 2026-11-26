@@ -200,9 +200,9 @@ public static class SleepMusicConfigUtility
         }
 
         Undo.RecordObject(stageRootT, "自动适配目标播放器屏幕");
-        // 向前偏移 1.5mm（紧贴视频画面前方，同时确保位于播放/暂停/输入框等控制 UI 之后）
-        float forwardOffset = ComputeSafeForwardOffset(targetRoot, ctrl.gameObject, center, frontNormal);
-        stageRootT.position = center + frontNormal * forwardOffset;
+        // 将音乐舞台严格放在视频画面正前方 2.0mm（绝不产生 Z-Fighting）
+        const float stageForwardOffset = 0.002f;
+        stageRootT.position = center + frontNormal * stageForwardOffset;
         // Unity UI Canvas 正面朝向 -transform.forward，因此 LookRotation(-frontNormal, screenUp) 确保正面永远朝向观众
         stageRootT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
 
@@ -213,67 +213,71 @@ public static class SleepMusicConfigUtility
         float sz = 0.001f / (Mathf.Abs(parentLossy.z) > 1e-5f ? parentLossy.z : 1f);
         stageRootT.localScale = new Vector3(sx, sy, sz);
 
-        // 确保音乐封面与歌词图层始终渲染在「开始 / 暂停 / 进度条 / 输入框」等控制主线之后、视频画面之前
-        EnsureBehindPlayerControls(stageCanvas, targetRoot, ctrl.gameObject);
+        // 自动识别场景内播放器的控制主线（开始/暂停/进度条/输入框 Canvas），自动前移至舞台前方 +5mm 并提高层级
+        int shiftedControls = EnsureControlsInFrontOfStage(stageCanvas, targetRoot, ctrl.gameObject, center, frontNormal, stageForwardOffset);
 
         EditorUtility.SetDirty(stageRootT);
         Debug.Log("[眠境音乐配置] 屏幕自动适配完成 | 命中屏幕: " + screenName +
                   " | 尺寸: " + worldW.ToString("F2") + "m x " + worldH.ToString("F2") + "m" +
-                  " | 前移: " + (forwardOffset * 1000f).ToString("F1") + "mm（已置于控制栏之后）");
+                  " | 舞台前移: 2.0mm | 已自动前移控制栏 Canvas: " + shiftedControls + " 个（位于舞台前方 5.0mm）");
         return true;
     }
 
-    // 计算安全的屏幕前移距离：紧贴视频画面前方，若前方存在按钮/滑块/输入框控制平面则严格插在画面与控制平面之间
-    private static float ComputeSafeForwardOffset(GameObject targetRoot, GameObject ignoreSubtree, Vector3 screenCenter, Vector3 frontNormal)
+    // 自动识别播放器控制栏 Canvas（如 VVMW 的 MainUI / Control Panel Root），若离屏幕太近（<4.5mm）则自动前移至 +5.0mm，
+    // 确保渲染顺序严格为：视频画面 (0mm) < 音乐封面歌词舞台 (+2mm) < 开始/暂停/输入框控制栏 (+5mm)。
+    private static int EnsureControlsInFrontOfStage(Canvas stageCanvas, GameObject targetRoot, GameObject ignoreSubtree, Vector3 screenCenter, Vector3 frontNormal, float stageOffset)
     {
-        float minControlDist = float.MaxValue;
-        Selectable[] controls = targetRoot.GetComponentsInChildren<Selectable>(true);
-        for (int i = 0; i < controls.Length; i++)
-        {
-            Selectable s = controls[i];
-            if (s == null || IsChildOf(s.transform, ignoreSubtree.transform)) continue;
-            float d = Vector3.Dot(s.transform.position - screenCenter, frontNormal);
-            if (d > 0.0005f && d < 0.15f && d < minControlDist)
-            {
-                minControlDist = d;
-            }
-        }
-        if (minControlDist < 0.01f) return Mathf.Clamp(minControlDist * 0.4f, 0.0008f, 0.002f);
-        return 0.0015f;
-    }
+        if (targetRoot == null) return 0;
 
-    // 调整渲染层级，保证音乐舞台永远在播放/暂停/输入框等交互控件之后渲染，绝不遮挡操作
-    private static void EnsureBehindPlayerControls(Canvas stageCanvas, GameObject targetRoot, GameObject ignoreSubtree)
-    {
-        if (stageCanvas == null || targetRoot == null) return;
-
-        int minControlOrder = int.MaxValue;
-        bool hasControlCanvas = false;
+        HashSet<Canvas> controlCanvases = new HashSet<Canvas>();
         Selectable[] controls = targetRoot.GetComponentsInChildren<Selectable>(true);
         for (int i = 0; i < controls.Length; i++)
         {
             Selectable s = controls[i];
             if (s == null || IsChildOf(s.transform, ignoreSubtree.transform)) continue;
             Canvas c = s.GetComponentInParent<Canvas>();
-            if (c != null && c != stageCanvas)
+            if (c != null && c != stageCanvas && !IsChildOf(c.transform, ignoreSubtree.transform))
             {
-                hasControlCanvas = true;
-                if (c.sortingOrder < minControlOrder) minControlOrder = c.sortingOrder;
+                // 取包含控件的最外层独立 WorldSpace Canvas（如 VVMW 的 MainUI）
+                Canvas rootCanvas = c.rootCanvas != null ? c.rootCanvas : c;
+                if (rootCanvas != stageCanvas && IsChildOf(rootCanvas.transform, targetRoot.transform))
+                {
+                    controlCanvases.Add(rootCanvas);
+                }
+                else
+                {
+                    controlCanvases.Add(c);
+                }
             }
         }
 
-        Undo.RecordObject(stageCanvas, "调整音乐舞台层级位于控制栏之后");
-        if (hasControlCanvas)
+        int minControlOrder = int.MaxValue;
+        int shiftedCount = 0;
+        const float targetControlOffset = 0.005f;
+
+        foreach (Canvas cc in controlCanvases)
         {
-            stageCanvas.overrideSorting = true;
-            stageCanvas.sortingOrder = minControlOrder - 1;
+            if (cc.sortingOrder < minControlOrder) minControlOrder = cc.sortingOrder;
+
+            // 若控制栏 Canvas 紧贴屏幕（例如 VVMW MainUI 默认在 +1mm，会落在舞台 +2mm 后面），自动将其沿正面法线前移至 +5mm
+            float curDist = Vector3.Dot(cc.transform.position - screenCenter, frontNormal);
+            if (curDist >= -0.02f && curDist < targetControlOffset - 0.0005f)
+            {
+                Undo.RecordObject(cc.transform, "自动前移播放器控制栏至音乐舞台前方");
+                cc.transform.position += frontNormal * (targetControlOffset - curDist);
+                EditorUtility.SetDirty(cc.transform);
+                shiftedCount++;
+            }
         }
-        else
+
+        if (stageCanvas != null)
         {
+            Undo.RecordObject(stageCanvas, "调整音乐舞台层级位于控制栏之后");
             stageCanvas.overrideSorting = true;
-            stageCanvas.sortingOrder = -1;
+            stageCanvas.sortingOrder = controlCanvases.Count > 0 ? (minControlOrder - 1) : -1;
+            EditorUtility.SetDirty(stageCanvas);
         }
-        EditorUtility.SetDirty(stageCanvas);
+        return shiftedCount;
     }
 
     /// <summary>一键将舞台朝向水平翻转 180°（用于个别自定义 Mesh 法线反向的播放器屏幕）。</summary>
@@ -346,30 +350,39 @@ public static class SleepMusicConfigUtility
             float sy = Mathf.Abs(localB.size.y * lossy.y);
             float sz = Mathf.Abs(localB.size.z * lossy.z);
 
-            // 判断最薄的轴作为屏幕法线轴（Quad 为 Z 轴最薄，Plane 为 Y 轴最薄）
-            float w, h;
+            // 判断最薄的轴作为屏幕法线轴（Quad 为 Z 轴最薄，Plane 为 Y 轴最薄），过滤掉厚度 > 0.08m 的非平面 3D 物体/触发盒
+            float w, h, thickness;
             Vector3 localNormal, localUp;
             if (sz <= sx && sz <= sy)
             {
-                w = sx; h = sy;
+                w = sx; h = sy; thickness = sz;
                 localNormal = -Vector3.forward;
                 localUp = Vector3.up;
             }
             else if (sy <= sx && sy <= sz)
             {
-                w = sx; h = sz;
+                w = sx; h = sz; thickness = sy;
                 localNormal = Vector3.up;
                 localUp = Vector3.forward;
             }
             else
             {
-                w = sz; h = sy;
+                w = sz; h = sy; thickness = sx;
                 localNormal = Vector3.right;
                 localUp = Vector3.up;
             }
 
-            if (w < 0.15f || h < 0.1f) continue;
-            float score = w * h * NameScreenWeight(mr.name);
+            if (thickness > 0.08f || w < 0.25f || h < 0.15f) continue;
+            float aspect = w / Mathf.Max(0.01f, h);
+            float aspectWeight = (aspect >= 1.2f && aspect <= 2.4f) ? 1.8f : 0.7f;
+            float shaderWeight = 1.0f;
+            if (mr.sharedMaterial != null && mr.sharedMaterial.shader != null)
+            {
+                string sh = mr.sharedMaterial.shader.name.ToLowerInvariant();
+                if (sh.Contains("video") || sh.Contains("screen") || sh.Contains("vvmw") || sh.Contains("tv") || sh.Contains("avpro"))
+                    shaderWeight = 3.0f;
+            }
+            float score = w * h * NameScreenWeight(mr.name) * aspectWeight * shaderWeight;
             if (score > bestScore)
             {
                 bestScore = score;
