@@ -73,8 +73,8 @@ public static class SleepMusicConfigUtility
             EditorUtility.SetDirty(ctrl.urlInputField);
         }
 
-        // 将 Proxy 字段同步写入底层 UdonBehaviour
-        UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
+        // 将 Proxy 字段同步写入底层 UdonBehaviour（同步前自动清理无效跨预制体 Proxy 引用，防止 UdonSharpBehaviourSerializer 空引用）
+        SafeCopyProxyToUdon(ctrl);
         EditorUtility.SetDirty(ctrl);
         if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
 
@@ -108,12 +108,25 @@ public static class SleepMusicConfigUtility
         if (ctrl == null || targetRoot == null) return;
         Undo.RecordObject(ctrl, "拖拽绑定指定播放器");
 
-        // 1) 在目标播放器子树中查找核心 UdonSharpBehaviour 或纯 UdonBehaviour
+        // 1) 在目标播放器子树中查找核心 UdonSharpBehaviour，并直接绑定其底层 UdonBehaviour（避免跨预制体 Proxy 序列化报错）
         UdonSharpBehaviour foundCtrl = FindBestPlayerControllerInHierarchy(targetRoot, ctrl);
-        ctrl.playerController = foundCtrl;
-
-        if (foundCtrl == null)
+        if (foundCtrl != null)
         {
+            UdonBehaviour backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(foundCtrl);
+            if (backing != null)
+            {
+                ctrl.rawUdonPlayer = backing;
+                ctrl.playerController = null;
+            }
+            else
+            {
+                ctrl.playerController = foundCtrl;
+                ctrl.rawUdonPlayer = null;
+            }
+        }
+        else
+        {
+            ctrl.playerController = null;
             UdonBehaviour selfUdon = UdonSharpEditorUtility.GetBackingUdonBehaviour(ctrl);
             UdonBehaviour[] udons = targetRoot.GetComponentsInChildren<UdonBehaviour>(true);
             ctrl.rawUdonPlayer = null;
@@ -125,10 +138,6 @@ public static class SleepMusicConfigUtility
                     break;
                 }
             }
-        }
-        else
-        {
-            ctrl.rawUdonPlayer = null;
         }
 
         // 2) 收集目标播放器子树内全部底层 BaseVRCVideoPlayer（AVPro / Unity）
@@ -153,7 +162,7 @@ public static class SleepMusicConfigUtility
             AutoFitToTargetScreen(ctrl, targetRoot);
         }
 
-        UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
+        SafeCopyProxyToUdon(ctrl);
         EditorUtility.SetDirty(ctrl);
         if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
 
@@ -634,19 +643,26 @@ public static class SleepMusicConfigUtility
         if (ctrl == null) return;
         Undo.RecordObject(ctrl, "一键自动绑定任意视频播放器");
 
-        // 1) 自动发现主流或自定义 UdonSharp 播放器核心脚本（兼容 VVMW 等未展开 Proxy 的预制体）
-        if (ctrl.playerController == null)
+        // 1) 自动发现主流或自定义 UdonSharp 播放器核心脚本，并直接绑定其底层 UdonBehaviour（彻底避免跨预制体 Proxy 序列化报错）
+        UdonSharpBehaviour detectedCtrl = ctrl.playerController != null ? ctrl.playerController : FindBestPlayerController(ctrl);
+        if (detectedCtrl != null)
         {
-            ctrl.playerController = FindBestPlayerController(ctrl);
+            UdonBehaviour backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(detectedCtrl);
+            if (backing != null)
+            {
+                ctrl.rawUdonPlayer = backing;
+                ctrl.playerController = null;
+            }
         }
 
         // 2) 自动收集底层 BaseVRCVideoPlayer（优先从已绑定控制器子树查找，否则全场景收集）
         List<BaseVRCVideoPlayer> foundPlayers = new List<BaseVRCVideoPlayer>();
         GameObject playerRoot = null;
-        if (ctrl.playerController != null)
+        Component anchorComp = (Component)ctrl.rawUdonPlayer ?? (Component)ctrl.playerController;
+        if (anchorComp != null)
         {
-            playerRoot = ctrl.playerController.transform.root != null ? ctrl.playerController.transform.root.gameObject : ctrl.playerController.gameObject;
-            foundPlayers.AddRange(ctrl.playerController.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
+            playerRoot = anchorComp.transform.root != null ? anchorComp.transform.root.gameObject : anchorComp.gameObject;
+            foundPlayers.AddRange(anchorComp.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
             if (foundPlayers.Count == 0 && playerRoot != null)
             {
                 foundPlayers.AddRange(playerRoot.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
@@ -687,15 +703,36 @@ public static class SleepMusicConfigUtility
             AutoFitToTargetScreen(ctrl, playerRoot);
         }
 
-        UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
+        SafeCopyProxyToUdon(ctrl);
         EditorUtility.SetDirty(ctrl);
         if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
 
-        string ctrlName = ctrl.playerController != null ? ctrl.playerController.GetType().Name + " (" + ctrl.playerController.name + ")" : "纯底层 VRCVideoPlayer 模式";
+        string ctrlName = ctrl.playerController != null ? ctrl.playerController.GetType().Name + " (" + ctrl.playerController.name + ")" : (ctrl.rawUdonPlayer != null ? "UdonBehaviour (" + ctrl.rawUdonPlayer.name + ")" : "纯底层 VRCVideoPlayer 模式");
         Debug.Log("[眠境音乐配置] 自动绑定播放器完成 | 控制器: " + ctrlName +
                   " | 底层 VideoPlayer: " + (ctrl.videoPlayers != null ? ctrl.videoPlayers.Length : 0) + " 个" +
                   " | 输入框: " + (ctrl.urlInputField != null ? ctrl.urlInputField.name : "无") +
                   " | 切歌事件: " + (string.IsNullOrEmpty(ctrl.playerSubmitEvent) ? "直调 PlayURL" : ctrl.playerSubmitEvent));
+    }
+
+    /// <summary>安全将 Proxy 同步至底层 UdonBehaviour：同步前自动将跨预制体 UdonSharpBehaviour 迁移为直接 UdonBehaviour 引用，防止 UdonSharpBehaviourSerializer 空引用。</summary>
+    public static void SafeCopyProxyToUdon(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null) return;
+        if (ctrl.playerController != null)
+        {
+            UdonBehaviour backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(ctrl.playerController);
+            if (backing != null)
+            {
+                ctrl.rawUdonPlayer = backing;
+                ctrl.playerController = null;
+            }
+            else
+            {
+                // 无法解析底层 UdonBehaviour 的悬空 Proxy 必须清空，否则 CopyProxyToUdon 会抛出 NullReferenceException
+                ctrl.playerController = null;
+            }
+        }
+        UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
     }
 
     private static void EnsureInputPrefixInitialized(SleepMusicLyricsController ctrl)
