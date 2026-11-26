@@ -2,6 +2,7 @@
     "name": "SleepMusicPlayer.Runtime",
     "rootNamespace": "",
     "references": [
+        "UnityEngine.UI",
         "VRC.SDKBase",
         "VRC.SDK3",
         "VRC.Udon",

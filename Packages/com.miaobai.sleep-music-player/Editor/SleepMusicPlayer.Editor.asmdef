@@ -3,9 +3,13 @@
     "rootNamespace": "",
     "references": [
         "SleepMusicPlayer.Runtime",
+        "UnityEngine.UI",
         "VRC.SDKBase",
+        "VRC.SDKBase.Editor",
         "VRC.SDK3",
+        "VRC.SDK3.Editor",
         "VRC.Udon",
+        "VRC.Udon.Editor",
         "UdonSharp.Runtime",
         "UdonSharp.Editor"
     ],
