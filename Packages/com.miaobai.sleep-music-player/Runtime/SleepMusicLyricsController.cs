@@ -403,12 +403,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private bool HasAnyPlayerBound()
     {
-        if (playerController != null || rawUdonPlayer != null) return true;
+        if (Utilities.IsValid(playerController) || Utilities.IsValid(rawUdonPlayer)) return true;
         if (videoPlayers != null)
         {
             for (int i = 0; i < videoPlayers.Length; i++)
             {
-                if (videoPlayers[i] != null) return true;
+                if (Utilities.IsValid(videoPlayers[i])) return true;
             }
         }
         return false;
@@ -421,7 +421,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         for (int i = 0; i < videoPlayers.Length; i++)
         {
             BaseVRCVideoPlayer vp = videoPlayers[i];
-            if (vp == null) continue;
+            if (!Utilities.IsValid(vp) || !vp.gameObject.activeInHierarchy || !vp.enabled) continue;
             if (vp.IsPlaying) return vp;
             if (readyFallback == null && vp.IsReady) readyFallback = vp;
         }
@@ -431,12 +431,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private object ReadPlayerVar(string varName)
     {
         if (string.IsNullOrEmpty(varName)) return null;
-        if (playerController != null)
+        if (Utilities.IsValid(playerController))
         {
             object v = playerController.GetProgramVariable(varName);
             if (v != null) return v;
         }
-        if (rawUdonPlayer != null)
+        if (Utilities.IsValid(rawUdonPlayer))
         {
             object v = rawUdonPlayer.GetProgramVariable(varName);
             if (v != null) return v;
@@ -556,9 +556,10 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         {
             for (int i = 0; i < videoPlayers.Length; i++)
             {
-                if (videoPlayers[i] != null)
+                BaseVRCVideoPlayer vp = videoPlayers[i];
+                if (Utilities.IsValid(vp) && vp.gameObject.activeInHierarchy && vp.enabled)
                 {
-                    videoPlayers[i].PlayURL(targetUrl);
+                    vp.PlayURL(targetUrl);
                     return true;
                 }
             }
