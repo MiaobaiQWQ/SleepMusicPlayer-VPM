@@ -200,8 +200,9 @@ public static class SleepMusicConfigUtility
         }
 
         Undo.RecordObject(stageRootT, "自动适配目标播放器屏幕");
-        // 向前偏移 4mm 避免与原屏幕产生 Z-Fighting 或被屏幕遮挡
-        stageRootT.position = center + frontNormal * 0.004f;
+        // 向前偏移 1.5mm（紧贴视频画面前方，同时确保位于播放/暂停/输入框等控制 UI 之后）
+        float forwardOffset = ComputeSafeForwardOffset(targetRoot, ctrl.gameObject, center, frontNormal);
+        stageRootT.position = center + frontNormal * forwardOffset;
         // Unity UI Canvas 正面朝向 -transform.forward，因此 LookRotation(-frontNormal, screenUp) 确保正面永远朝向观众
         stageRootT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
 
@@ -212,11 +213,67 @@ public static class SleepMusicConfigUtility
         float sz = 0.001f / (Mathf.Abs(parentLossy.z) > 1e-5f ? parentLossy.z : 1f);
         stageRootT.localScale = new Vector3(sx, sy, sz);
 
+        // 确保音乐封面与歌词图层始终渲染在「开始 / 暂停 / 进度条 / 输入框」等控制主线之后、视频画面之前
+        EnsureBehindPlayerControls(stageCanvas, targetRoot, ctrl.gameObject);
+
         EditorUtility.SetDirty(stageRootT);
         Debug.Log("[眠境音乐配置] 屏幕自动适配完成 | 命中屏幕: " + screenName +
                   " | 尺寸: " + worldW.ToString("F2") + "m x " + worldH.ToString("F2") + "m" +
-                  " | 正面法线: " + frontNormal.ToString("F2"));
+                  " | 前移: " + (forwardOffset * 1000f).ToString("F1") + "mm（已置于控制栏之后）");
         return true;
+    }
+
+    // 计算安全的屏幕前移距离：紧贴视频画面前方，若前方存在按钮/滑块/输入框控制平面则严格插在画面与控制平面之间
+    private static float ComputeSafeForwardOffset(GameObject targetRoot, GameObject ignoreSubtree, Vector3 screenCenter, Vector3 frontNormal)
+    {
+        float minControlDist = float.MaxValue;
+        Selectable[] controls = targetRoot.GetComponentsInChildren<Selectable>(true);
+        for (int i = 0; i < controls.Length; i++)
+        {
+            Selectable s = controls[i];
+            if (s == null || IsChildOf(s.transform, ignoreSubtree.transform)) continue;
+            float d = Vector3.Dot(s.transform.position - screenCenter, frontNormal);
+            if (d > 0.0005f && d < 0.15f && d < minControlDist)
+            {
+                minControlDist = d;
+            }
+        }
+        if (minControlDist < 0.01f) return Mathf.Clamp(minControlDist * 0.4f, 0.0008f, 0.002f);
+        return 0.0015f;
+    }
+
+    // 调整渲染层级，保证音乐舞台永远在播放/暂停/输入框等交互控件之后渲染，绝不遮挡操作
+    private static void EnsureBehindPlayerControls(Canvas stageCanvas, GameObject targetRoot, GameObject ignoreSubtree)
+    {
+        if (stageCanvas == null || targetRoot == null) return;
+
+        int minControlOrder = int.MaxValue;
+        bool hasControlCanvas = false;
+        Selectable[] controls = targetRoot.GetComponentsInChildren<Selectable>(true);
+        for (int i = 0; i < controls.Length; i++)
+        {
+            Selectable s = controls[i];
+            if (s == null || IsChildOf(s.transform, ignoreSubtree.transform)) continue;
+            Canvas c = s.GetComponentInParent<Canvas>();
+            if (c != null && c != stageCanvas)
+            {
+                hasControlCanvas = true;
+                if (c.sortingOrder < minControlOrder) minControlOrder = c.sortingOrder;
+            }
+        }
+
+        Undo.RecordObject(stageCanvas, "调整音乐舞台层级位于控制栏之后");
+        if (hasControlCanvas)
+        {
+            stageCanvas.overrideSorting = true;
+            stageCanvas.sortingOrder = minControlOrder - 1;
+        }
+        else
+        {
+            stageCanvas.overrideSorting = true;
+            stageCanvas.sortingOrder = -1;
+        }
+        EditorUtility.SetDirty(stageCanvas);
     }
 
     /// <summary>一键将舞台朝向水平翻转 180°（用于个别自定义 Mesh 法线反向的播放器屏幕）。</summary>
@@ -479,13 +536,67 @@ public static class SleepMusicConfigUtility
         return null;
     }
 
+    /// <summary>
+    /// 兼容 UdonSharp 1.x：同时扫描已解包 Proxy 与尚未展开 Proxy 的 UdonBehaviour（解决 VVMW 等新拖入预制体搜不到的问题）。
+    /// </summary>
+    public static List<UdonSharpBehaviour> CollectUdonSharpBehaviours(GameObject rootOrNull)
+    {
+        List<UdonSharpBehaviour> list = new List<UdonSharpBehaviour>();
+        HashSet<int> seen = new HashSet<int>();
+
+        UdonSharpBehaviour[] direct = rootOrNull != null
+            ? rootOrNull.GetComponentsInChildren<UdonSharpBehaviour>(true)
+            : Object.FindObjectsOfType<UdonSharpBehaviour>(true);
+        for (int i = 0; i < direct.Length; i++)
+        {
+            if (direct[i] != null && seen.Add(direct[i].GetInstanceID())) list.Add(direct[i]);
+        }
+
+        UdonBehaviour[] udons = rootOrNull != null
+            ? rootOrNull.GetComponentsInChildren<UdonBehaviour>(true)
+            : Object.FindObjectsOfType<UdonBehaviour>(true);
+        for (int i = 0; i < udons.Length; i++)
+        {
+            if (udons[i] == null) continue;
+            UdonSharpBehaviour proxy = UdonSharpEditorUtility.GetProxyBehaviour(udons[i]);
+            if (proxy != null && seen.Add(proxy.GetInstanceID())) list.Add(proxy);
+        }
+        return list;
+    }
+
+    /// <summary>在场景中可靠查找 SleepMusicLyricsController（兼容未解包 UdonBehaviour 预制体）。</summary>
+    public static SleepMusicLyricsController FindSceneController()
+    {
+        SleepMusicLyricsController direct = Object.FindObjectOfType<SleepMusicLyricsController>(true);
+        if (direct != null) return direct;
+
+        List<UdonSharpBehaviour> all = CollectUdonSharpBehaviours(null);
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (all[i] is SleepMusicLyricsController c) return c;
+        }
+        return null;
+    }
+
+    /// <summary>在场景中可靠查找全部 SleepMusicLyricsController。</summary>
+    public static List<SleepMusicLyricsController> FindAllSceneControllers()
+    {
+        List<SleepMusicLyricsController> result = new List<SleepMusicLyricsController>();
+        List<UdonSharpBehaviour> all = CollectUdonSharpBehaviours(null);
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (all[i] is SleepMusicLyricsController c) result.Add(c);
+        }
+        return result;
+    }
+
     private static UdonSharpBehaviour FindBestPlayerControllerInHierarchy(GameObject root, SleepMusicLyricsController self)
     {
         string[] preferredNames = { "Core", "TVManager", "YamaPlayerController", "YamaPlayer", "USharpVideoPlayer", "VideoCore", "SyncVideoPlayer" };
-        UdonSharpBehaviour[] all = root.GetComponentsInChildren<UdonSharpBehaviour>(true);
+        List<UdonSharpBehaviour> all = CollectUdonSharpBehaviours(root);
         UdonSharpBehaviour fallback = null;
 
-        for (int i = 0; i < all.Length; i++)
+        for (int i = 0; i < all.Count; i++)
         {
             UdonSharpBehaviour b = all[i];
             if (b == null || b == self || b is SleepMusicLyricsController || b is SleepPlayerUIController) continue;
@@ -504,14 +615,14 @@ public static class SleepMusicConfigUtility
     }
 
     /// <summary>
-    /// 一键自动扫描并绑定场景中任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）。
+    /// 一键自动扫描并绑定场景中任意 VRChat 视频播放器（VizVid / VVMW / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）。
     /// </summary>
     public static void AutoBindAnyPlayer(SleepMusicLyricsController ctrl)
     {
         if (ctrl == null) return;
         Undo.RecordObject(ctrl, "一键自动绑定任意视频播放器");
 
-        // 1) 自动发现主流或自定义 UdonSharp 播放器核心脚本
+        // 1) 自动发现主流或自定义 UdonSharp 播放器核心脚本（兼容 VVMW 等未展开 Proxy 的预制体）
         if (ctrl.playerController == null)
         {
             ctrl.playerController = FindBestPlayerController(ctrl);
@@ -519,42 +630,48 @@ public static class SleepMusicConfigUtility
 
         // 2) 自动收集底层 BaseVRCVideoPlayer（优先从已绑定控制器子树查找，否则全场景收集）
         List<BaseVRCVideoPlayer> foundPlayers = new List<BaseVRCVideoPlayer>();
+        GameObject playerRoot = null;
         if (ctrl.playerController != null)
         {
+            playerRoot = ctrl.playerController.transform.root != null ? ctrl.playerController.transform.root.gameObject : ctrl.playerController.gameObject;
             foundPlayers.AddRange(ctrl.playerController.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
-            if (foundPlayers.Count == 0 && ctrl.playerController.transform.root != null)
+            if (foundPlayers.Count == 0 && playerRoot != null)
             {
-                foundPlayers.AddRange(ctrl.playerController.transform.root.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
+                foundPlayers.AddRange(playerRoot.GetComponentsInChildren<BaseVRCVideoPlayer>(true));
             }
         }
         if (foundPlayers.Count == 0)
         {
             foundPlayers.AddRange(Object.FindObjectsOfType<BaseVRCVideoPlayer>(true));
+            if (playerRoot == null && foundPlayers.Count > 0 && foundPlayers[0] != null)
+            {
+                playerRoot = foundPlayers[0].transform.root.gameObject;
+            }
         }
         ctrl.videoPlayers = foundPlayers.ToArray();
 
-        // 3) 自动绑定场景中的 VRCUrlInputField（若尚未绑定）
-        if (ctrl.urlInputField == null)
+        // 3) 非纯舞台模式时自动绑定输入框与提交事件
+        if (!ctrl.stageOnlyMode)
         {
-            if (ctrl.playerController != null && ctrl.playerController.transform.root != null)
-            {
-                ctrl.urlInputField = ctrl.playerController.transform.root.GetComponentInChildren<VRCUrlInputField>(true);
-            }
             if (ctrl.urlInputField == null)
             {
-                ctrl.urlInputField = Object.FindObjectOfType<VRCUrlInputField>(true);
+                if (playerRoot != null) ctrl.urlInputField = playerRoot.GetComponentInChildren<VRCUrlInputField>(true);
+                if (ctrl.urlInputField == null) ctrl.urlInputField = Object.FindObjectOfType<VRCUrlInputField>(true);
+            }
+            if (ctrl.urlInputField != null && (ctrl.playerSubmitTarget == null || string.IsNullOrEmpty(ctrl.playerSubmitEvent)))
+            {
+                TryExtractSubmitEvent(ctrl.urlInputField, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
+                if (submitTarget != null && !string.IsNullOrEmpty(submitEvent))
+                {
+                    ctrl.playerSubmitTarget = submitTarget;
+                    ctrl.playerSubmitEvent = submitEvent;
+                }
             }
         }
-
-        // 4) 自动从输入框的 onEndEdit 持久监听中提取原播放器的提交目标与事件名（用于音乐池自动切歌）
-        if (ctrl.urlInputField != null && (ctrl.playerSubmitTarget == null || string.IsNullOrEmpty(ctrl.playerSubmitEvent)))
+        else if (playerRoot != null)
         {
-            TryExtractSubmitEvent(ctrl.urlInputField, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
-            if (submitTarget != null && !string.IsNullOrEmpty(submitEvent))
-            {
-                ctrl.playerSubmitTarget = submitTarget;
-                ctrl.playerSubmitEvent = submitEvent;
-            }
+            // 纯舞台模式：自动适配目标播放器屏幕尺寸并将音乐图层置于控制栏之后
+            AutoFitToTargetScreen(ctrl, playerRoot);
         }
 
         UdonSharpEditorUtility.CopyProxyToUdon(ctrl);
@@ -571,10 +688,10 @@ public static class SleepMusicConfigUtility
     private static UdonSharpBehaviour FindBestPlayerController(SleepMusicLyricsController self)
     {
         string[] preferredNames = { "Core", "TVManager", "YamaPlayerController", "YamaPlayer", "USharpVideoPlayer", "VideoCore", "SyncVideoPlayer" };
-        UdonSharpBehaviour[] all = Object.FindObjectsOfType<UdonSharpBehaviour>(true);
+        List<UdonSharpBehaviour> all = CollectUdonSharpBehaviours(null);
         UdonSharpBehaviour fallback = null;
 
-        for (int i = 0; i < all.Length; i++)
+        for (int i = 0; i < all.Count; i++)
         {
             UdonSharpBehaviour b = all[i];
             if (b == null || b == self || b is SleepMusicLyricsController || b is SleepPlayerUIController) continue;
@@ -735,13 +852,20 @@ public class SleepMusicSettingsWindow : EditorWindow
     [MenuItem("Tools/眠境音乐播放器/一键自动绑定场景任意播放器", false, 11)]
     public static void AutoBindCurrentScenePlayer()
     {
-        SleepMusicLyricsController ctrl = Object.FindObjectOfType<SleepMusicLyricsController>(true);
+        SleepMusicLyricsController ctrl = SleepMusicConfigUtility.FindSceneController();
         if (ctrl == null)
         {
-            EditorUtility.DisplayDialog("未找到控制器", "当前场景未找到 SleepMusicLyricsController。", "确定");
-            return;
+            // 若场景中尚未创建纯舞台预制体，自动实例化并立即完成绑定与屏幕适配
+            SleepMusicPrefabMenu.CreateStageOnlyInScene();
+            ctrl = SleepMusicConfigUtility.FindSceneController();
+            if (ctrl == null)
+            {
+                EditorUtility.DisplayDialog("未找到控制器", "无法创建或找到 SleepMusicLyricsController，请先从菜单创建纯歌词与封面舞台。", "确定");
+                return;
+            }
         }
         SleepMusicConfigUtility.AutoBindAnyPlayer(ctrl);
+        Selection.activeGameObject = ctrl.gameObject;
     }
 
     [MenuItem("Tools/眠境音乐播放器/接口与音乐池一键配置", false, 10)]
@@ -760,7 +884,7 @@ public class SleepMusicSettingsWindow : EditorWindow
 
     private void FindController()
     {
-        if (_target == null) _target = Object.FindObjectOfType<SleepMusicLyricsController>(true);
+        if (_target == null) _target = SleepMusicConfigUtility.FindSceneController();
     }
 
     private void OnGUI()
@@ -916,8 +1040,8 @@ public static class SleepMusicHierarchyAutoBinder
     {
         if (EditorApplication.isPlayingOrWillChangePlaymode) return;
 
-        SleepMusicLyricsController[] controllers = Object.FindObjectsOfType<SleepMusicLyricsController>(true);
-        for (int i = 0; i < controllers.Length; i++)
+        List<SleepMusicLyricsController> controllers = SleepMusicConfigUtility.FindAllSceneControllers();
+        for (int i = 0; i < controllers.Count; i++)
         {
             SleepMusicLyricsController ctrl = controllers[i];
             if (ctrl == null || !ctrl.gameObject.scene.IsValid()) continue;
