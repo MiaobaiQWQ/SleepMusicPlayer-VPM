@@ -135,17 +135,16 @@ public static class SleepMusicConfigUtility
         BaseVRCVideoPlayer[] vps = targetRoot.GetComponentsInChildren<BaseVRCVideoPlayer>(true);
         ctrl.videoPlayers = vps;
 
-        // 3) 非纯舞台模式时，绑定目标播放器内的输入框与 onEndEdit 提交事件（纯舞台模式不接管原播放器控件）
-        if (!ctrl.stageOnlyMode)
+        // 3) 自动绑定目标播放器内的 VRCUrlInputField 与提交事件，并自动填充默认直链前缀（若当前为空）
+        VRCUrlInputField foundInput = targetRoot.GetComponentInChildren<VRCUrlInputField>(true);
+        if (foundInput == null) foundInput = Object.FindObjectOfType<VRCUrlInputField>(true);
+        if (foundInput != null)
         {
-            VRCUrlInputField foundInput = targetRoot.GetComponentInChildren<VRCUrlInputField>(true);
-            if (foundInput != null)
-            {
-                ctrl.urlInputField = foundInput;
-                TryExtractSubmitEvent(foundInput, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
-                ctrl.playerSubmitTarget = submitTarget;
-                ctrl.playerSubmitEvent = submitEvent;
-            }
+            ctrl.urlInputField = foundInput;
+            TryExtractSubmitEvent(foundInput, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
+            ctrl.playerSubmitTarget = submitTarget;
+            ctrl.playerSubmitEvent = submitEvent;
+            EnsureInputPrefixInitialized(ctrl);
         }
 
         // 4) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
@@ -663,15 +662,15 @@ public static class SleepMusicConfigUtility
         }
         ctrl.videoPlayers = foundPlayers.ToArray();
 
-        // 3) 非纯舞台模式时自动绑定输入框与提交事件
-        if (!ctrl.stageOnlyMode)
+        // 3) 无论是否纯舞台模式，均自动绑定播放器输入框与提交事件，并初始化默认直链前缀
+        if (ctrl.urlInputField == null)
         {
-            if (ctrl.urlInputField == null)
-            {
-                if (playerRoot != null) ctrl.urlInputField = playerRoot.GetComponentInChildren<VRCUrlInputField>(true);
-                if (ctrl.urlInputField == null) ctrl.urlInputField = Object.FindObjectOfType<VRCUrlInputField>(true);
-            }
-            if (ctrl.urlInputField != null && (ctrl.playerSubmitTarget == null || string.IsNullOrEmpty(ctrl.playerSubmitEvent)))
+            if (playerRoot != null) ctrl.urlInputField = playerRoot.GetComponentInChildren<VRCUrlInputField>(true);
+            if (ctrl.urlInputField == null) ctrl.urlInputField = Object.FindObjectOfType<VRCUrlInputField>(true);
+        }
+        if (ctrl.urlInputField != null)
+        {
+            if (ctrl.playerSubmitTarget == null || string.IsNullOrEmpty(ctrl.playerSubmitEvent))
             {
                 TryExtractSubmitEvent(ctrl.urlInputField, ctrl, out UdonBehaviour submitTarget, out string submitEvent);
                 if (submitTarget != null && !string.IsNullOrEmpty(submitEvent))
@@ -680,8 +679,9 @@ public static class SleepMusicConfigUtility
                     ctrl.playerSubmitEvent = submitEvent;
                 }
             }
+            EnsureInputPrefixInitialized(ctrl);
         }
-        else if (playerRoot != null)
+        if (ctrl.stageOnlyMode && playerRoot != null)
         {
             // 纯舞台模式：自动适配目标播放器屏幕尺寸并将音乐图层置于控制栏之后
             AutoFitToTargetScreen(ctrl, playerRoot);
@@ -696,6 +696,23 @@ public static class SleepMusicConfigUtility
                   " | 底层 VideoPlayer: " + (ctrl.videoPlayers != null ? ctrl.videoPlayers.Length : 0) + " 个" +
                   " | 输入框: " + (ctrl.urlInputField != null ? ctrl.urlInputField.name : "无") +
                   " | 切歌事件: " + (string.IsNullOrEmpty(ctrl.playerSubmitEvent) ? "直调 PlayURL" : ctrl.playerSubmitEvent));
+    }
+
+    private static void EnsureInputPrefixInitialized(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null || ctrl.urlInputField == null) return;
+        if (VRCUrl.IsNullOrEmpty(ctrl.fixedInputPrefix) || string.IsNullOrEmpty(ctrl.fixedInputPrefix.Get()))
+        {
+            string directUrl = BuildUrl(ctrl.apiDomain, ctrl.directPathTemplate, ctrl.worldId, ctrl.poolName, 0);
+            ctrl.fixedInputPrefix = new VRCUrl(directUrl);
+        }
+        VRCUrl cur = ctrl.urlInputField.GetUrl();
+        if (VRCUrl.IsNullOrEmpty(cur) || string.IsNullOrEmpty(cur.Get()))
+        {
+            Undo.RecordObject(ctrl.urlInputField, "初始化音乐输入框默认直链前缀");
+            ctrl.urlInputField.SetUrl(ctrl.fixedInputPrefix);
+            EditorUtility.SetDirty(ctrl.urlInputField);
+        }
     }
 
     private static UdonSharpBehaviour FindBestPlayerController(SleepMusicLyricsController self)
