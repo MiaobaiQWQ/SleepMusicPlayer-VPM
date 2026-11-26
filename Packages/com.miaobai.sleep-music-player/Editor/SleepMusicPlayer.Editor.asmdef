@@ -10,6 +10,7 @@
         "VRC.SDK3.Editor",
         "VRC.Udon",
         "VRC.Udon.Editor",
+        "VRC.Udon.Serialization.OdinSerializer",
         "UdonSharp.Runtime",
         "UdonSharp.Editor"
     ],
