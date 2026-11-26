@@ -1,7 +1,7 @@
 {
   "name": "com.miaobai.sleep-music-player",
   "displayName": "SleepMusic Player (眠境音乐歌词播放器)",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "unity": "2022.3",
   "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
   "license": "MIT",
