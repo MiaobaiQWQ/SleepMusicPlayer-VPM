@@ -684,8 +684,8 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     {
         if (danmakuOverlay != null) danmakuOverlay.ClearDanmaku();
 
-        bool isDanmakuApi = urlText.Contains(PathDanmakuMarker);
-        bool isDirect = urlText.Contains(PathDirectMarker);
+        bool isDanmakuApi = urlText.Contains(PathDanmakuMarker) || urlText.Contains("/v3/vrc?");
+        bool isDirect = urlText.Contains(PathDirectMarker) || urlText.Contains("/v4/url");
         bool isVideo = IsKnownVideoUrl(urlText);
 
         // 视频弹幕分支：绝不激活不透明音乐封面舞台，仅拉取弹幕 JSON（保留 _lastPlayedUrl 防止 0.15s 循环重拉清空弹幕！）

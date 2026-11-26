@@ -6,7 +6,7 @@ using VRC.SDKBase;
 
 /// <summary>
 /// 眠境 GPU 高性能弹幕引擎：最高支持 10,000 条弹幕、分帧无卡顿 JSON 解析、
-/// 80 槽位预分配对象池 + GPU 顶点驱动平滑滚动 + GPU 片段描边（零 Outline 顶点膨胀、零每帧 Canvas 重建、单 DrawCall 批处理）。
+/// 80 槽位零 GC 对象池 + GPU 4 点片段描边（零 Outline 顶点膨胀、1 DrawCall 批处理、VR 双眼原生兼容）。
 /// </summary>
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class SleepDanmakuOverlay : UdonSharpBehaviour
@@ -14,22 +14,17 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     #region 常量与配置
 
     private const string LogPrefix = "[眠境弹幕GPU]";
-    private const string PropClock = "_DanmakuClock";
-    private const string PropSlotAnim = "_SlotAnim";
-    private const string PropClipRect = "_ClipRect";
-
     private const int MaxDanmakuItems = 10000;
-    private const int MaxGpuSlots = 80;
-    private const int ParseBudgetPerFrame = 450;
+    private const int MaxPoolSlots = 80;
+    private const int ParseBudgetPerFrame = 500;
     private const int ScrollLaneCount = 12;
     private const int FixedLaneCount = 4;
     private const float FixedDurationSec = 4.0f;
     private const float DefaultHalfW = 960f;
     private const float DefaultHalfH = 540f;
     private const float SeekJumpThresholdSec = 1.5f;
-    private const float SlotZStep = 0.05f;
 
-    [Header("GPU 弹幕材质（使用 SleepSanctuary/DanmakuGPU，单 DrawCall + 零 Canvas 重建）")]
+    [Header("GPU 弹幕材质（SleepSanctuary/DanmakuGPU：4点片段描边 + 单 DrawCall）")]
     public Material danmakuGpuMaterial;
 
     [Header("弹幕开关与显示调优")]
@@ -38,7 +33,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
 
     [Tooltip("弹幕整体透明度")]
     [Range(0.1f, 1.0f)]
-    public float danmakuOpacity = 0.88f;
+    public float danmakuOpacity = 0.90f;
 
     [Tooltip("滚动弹幕横穿整个屏幕所需时间（秒）")]
     [Range(4.0f, 16.0f)]
@@ -55,15 +50,14 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     [Tooltip("是否输出 VRChat 控制台中文性能日志")]
     public bool enableDebugLog = true;
 
-    [Header("预生成对象池（推荐 80 槽位，运行期零 Instantiate / 零 Outline）")]
+    [Header("预生成对象池（80 槽位，运行期零 Instantiate / 零 Outline）")]
     public GameObject overlayRoot;
     public Text[] danmakuPool;
 
     #endregion
 
-    #region 运行时数据与 GPU 池状态
+    #region 运行时数据与池状态
 
-    // 固定复用缓冲（最高 10,000 条，加载新视频时零重复大数组分配）
     private int _count;
     private float[] _times = new float[MaxDanmakuItems];
     private string[] _texts = new string[MaxDanmakuItems];
@@ -71,23 +65,22 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private int[] _colors = new int[MaxDanmakuItems];
     private int[] _sizes = new int[MaxDanmakuItems];
 
-    // 分帧增量解析状态（10,000 条弹幕分散到多帧解析，每帧 <0.5ms，VR 零掉帧）
     private string _parsingJson = "";
     private int _parsingPos;
     private bool _isParsing;
+    private bool _readyToPlay;
     private float _parseStartTime;
 
     private int _cursor;
     private float _lastSyncTime = -10f;
-    private float _gpuClock;
+    private float _clock;
     private bool _poolInitialized;
     private int _nextSlotScan;
+    private int _spawnedTotalCount;
 
-    // GPU 槽位运动参数数组：x=startX, y=speedPxPerSec, z=spawnClock, w=isScroll(1/0)
-    private Vector4[] _slotAnim = new Vector4[MaxGpuSlots];
-    private bool _slotAnimDirty;
+    private float _canvasHalfW = DefaultHalfW;
+    private float _canvasHalfH = DefaultHalfH;
 
-    // 预缓存池对象状态
     private RectTransform[] _slotRects;
     private bool[] _slotActive;
     private int[] _slotType;
@@ -96,16 +89,12 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private float[] _slotDuration;
     private float[] _slotStartX;
     private float[] _slotSpeed;
+    private float[] _slotY;
     private float[] _slotWidth;
 
-    // 轨道占用状态（防止弹幕互相重叠）
     private int[] _scrollLaneOwner = new int[ScrollLaneCount];
     private float[] _topLaneFreeAt = new float[FixedLaneCount];
     private float[] _bottomLaneFreeAt = new float[FixedLaneCount];
-
-    private float _canvasHalfW = DefaultHalfW;
-    private float _canvasHalfH = DefaultHalfH;
-    private int _spawnedTotalCount;
 
     public bool HasDanmaku => _count > 0 || _isParsing;
     public int LoadedCount => _count;
@@ -120,20 +109,11 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         HideAllSlots();
     }
 
-    private void InitPool()
+    private void RefreshCanvasBounds()
     {
-        if (_poolInitialized) return;
-        _poolInitialized = true;
-
-        // 动态读取当前叠加层所在画布的实际宽高与边界，确保适配任意尺寸 Canvas 且绝不被 _ClipRect 误裁
         RectTransform overlayRt = overlayRoot != null ? overlayRoot.GetComponent<RectTransform>() : GetComponent<RectTransform>();
         if (overlayRt != null)
         {
-            Vector3 op = overlayRt.anchoredPosition3D;
-            if (Mathf.Abs(op.z) > 0.0001f)
-            {
-                overlayRt.anchoredPosition3D = new Vector3(op.x, op.y, 0f);
-            }
             Rect r = overlayRt.rect;
             if (r.width > 100f && r.height > 100f)
             {
@@ -141,12 +121,16 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
                 _canvasHalfH = r.height * 0.5f;
             }
         }
-        if (danmakuGpuMaterial != null)
-        {
-            danmakuGpuMaterial.SetVector(PropClipRect, new Vector4(-_canvasHalfW, -_canvasHalfH, _canvasHalfW, _canvasHalfH));
-        }
+    }
 
-        int n = danmakuPool != null ? Mathf.Min(danmakuPool.Length, MaxGpuSlots) : 0;
+    private void InitPool()
+    {
+        if (_poolInitialized) return;
+        _poolInitialized = true;
+
+        RefreshCanvasBounds();
+
+        int n = danmakuPool != null ? Mathf.Min(danmakuPool.Length, MaxPoolSlots) : 0;
         _slotRects = new RectTransform[n];
         _slotActive = new bool[n];
         _slotType = new int[n];
@@ -155,6 +139,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         _slotDuration = new float[n];
         _slotStartX = new float[n];
         _slotSpeed = new float[n];
+        _slotY = new float[n];
         _slotWidth = new float[n];
 
         for (int i = 0; i < n; i++)
@@ -189,23 +174,22 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     public void SetDanmakuEnabled(bool enabled)
     {
         enableDanmaku = enabled;
-        if (overlayRoot != null) overlayRoot.SetActive(enabled && HasDanmaku);
         if (!enabled) HideAllSlots();
     }
 
-    /// <summary>清空全部弹幕数据并隐藏所有槽位。</summary>
+    /// <summary>清空全部弹幕数据并隐藏所有槽位（不关闭挂载自身的 overlayRoot，防止 Udon 对象失活）。</summary>
     public void ClearDanmaku()
     {
         _count = 0;
         _cursor = 0;
         _isParsing = false;
+        _readyToPlay = false;
         _parsingJson = "";
         _parsingPos = 0;
         _lastSyncTime = -10f;
-        _gpuClock = 0f;
+        _clock = 0f;
         _spawnedTotalCount = 0;
         HideAllSlots();
-        if (overlayRoot != null) overlayRoot.SetActive(false);
     }
 
     private void HideAllSlots()
@@ -216,24 +200,21 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             for (int i = 0; i < _slotActive.Length; i++)
             {
                 _slotActive[i] = false;
-                _slotAnim[i] = Vector4.zero;
                 if (danmakuPool != null && i < danmakuPool.Length && danmakuPool[i] != null)
                 {
                     danmakuPool[i].gameObject.SetActive(false);
                 }
             }
-            _slotAnimDirty = true;
         }
         ResetLanes();
-        FlushGpuUniforms();
     }
 
-    /// <summary>
-    /// 分帧非阻塞加载弹幕 JSON（最高 10,000 条，首帧立即可播，剩余分帧解析，VR 零掉帧）。
-    /// </summary>
+    /// <summary>分帧非阻塞加载弹幕 JSON（最高 10,000 条，完整排序后按精确时间戳发射）。</summary>
     public int LoadFromJson(string json)
     {
+        if (overlayRoot != null && !overlayRoot.activeSelf) overlayRoot.SetActive(true);
         InitPool();
+        RefreshCanvasBounds();
         ClearDanmaku();
         if (string.IsNullOrEmpty(json)) return 0;
 
@@ -243,18 +224,19 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         _parsingJson = json;
         _parsingPos = arrayStart;
         _isParsing = true;
+        _readyToPlay = false;
         _parseStartTime = Time.realtimeSinceStartup;
 
-        // 首帧立即解析第一批（最多 450 条），确保视频开播瞬间即有弹幕
         StepIncrementalParse(ParseBudgetPerFrame);
-        if (_count > 0 && overlayRoot != null) overlayRoot.SetActive(enableDanmaku);
         return _count;
     }
 
-    /// <summary>同步解析全部弹幕（仅用于离线测试，运行期请用分帧版 LoadFromJson）。</summary>
+    /// <summary>同步解析全部弹幕（仅用于离线测试）。</summary>
     public int LoadFromJsonImmediate(string json)
     {
+        if (overlayRoot != null && !overlayRoot.activeSelf) overlayRoot.SetActive(true);
         InitPool();
+        RefreshCanvasBounds();
         ClearDanmaku();
         if (string.IsNullOrEmpty(json)) return 0;
         int arrayStart = FindDanmakuArrayStart(json);
@@ -263,9 +245,9 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         _parsingJson = json;
         _parsingPos = arrayStart;
         _isParsing = true;
+        _readyToPlay = false;
         _parseStartTime = Time.realtimeSinceStartup;
         StepIncrementalParse(MaxDanmakuItems);
-        if (_count > 0 && overlayRoot != null) overlayRoot.SetActive(enableDanmaku);
         return _count;
     }
 
@@ -321,33 +303,37 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             _isParsing = false;
             _parsingJson = "";
             if (_count > 1) EnsureSortedByTime();
-            if (_lastSyncTime >= 0f) _cursor = BinarySearchTime(_lastSyncTime);
-            if (overlayRoot != null && _count > 0) overlayRoot.SetActive(enableDanmaku);
+            _readyToPlay = _count > 0;
+            _lastSyncTime = -10f;
+            RefreshCanvasBounds();
 
             if (enableDebugLog)
             {
                 float ms = (Time.realtimeSinceStartup - _parseStartTime) * 1000f;
-                Debug.Log(LogPrefix + " 分帧解析全部完成 | 共 " + _count + " 条弹幕（上限 " + MaxDanmakuItems + "）| 总跨度 " + ms.ToString("F1") + " ms | GPU 单 DrawCall 渲染就绪");
+                Debug.Log(LogPrefix + " 解析排序完成 | 共 " + _count + " 条弹幕（上限 " + MaxDanmakuItems + "）| 耗时 " + ms.ToString("F1") + " ms | 画布半尺寸: " + _canvasHalfW.ToString("F0") + "x" + _canvasHalfH.ToString("F0"));
             }
         }
     }
 
-    /// <summary>每帧驱动 GPU 时钟与弹幕发射（飞行期间零 RectTransform 移动、零 Canvas 重建）。</summary>
+    /// <summary>每帧同步播放器本地播放时间，驱动弹幕发射与平滑飞行。</summary>
     public void SyncPlayback(float localTime, bool isPlaying, bool isPaused)
     {
         if (!enableDanmaku) return;
+        if (overlayRoot != null && !overlayRoot.activeSelf) overlayRoot.SetActive(true);
         InitPool();
 
-        if (_isParsing) StepIncrementalParse(ParseBudgetPerFrame);
-        if (_count <= 0) return;
+        if (_isParsing)
+        {
+            StepIncrementalParse(ParseBudgetPerFrame);
+            if (_isParsing) return;
+        }
+        if (!_readyToPlay || _count <= 0) return;
 
-        if (overlayRoot != null && !overlayRoot.activeSelf) overlayRoot.SetActive(true);
-
-        // 拖动进度条或中途进图：清空活跃槽位并二分定位
+        // 首次定位或拖动进度条 / 中途进图：重置槽位并二分定位到当前时间前 0.5 秒
         if (_lastSyncTime < -5f || Mathf.Abs(localTime - _lastSyncTime) > SeekJumpThresholdSec)
         {
             HideAllSlots();
-            _cursor = BinarySearchTime(localTime);
+            _cursor = BinarySearchTime(Mathf.Max(0f, localTime - 0.5f));
             _lastSyncTime = localTime;
             return;
         }
@@ -358,52 +344,34 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             return;
         }
 
-        _gpuClock += Time.deltaTime;
+        _clock += Time.deltaTime;
         _lastSyncTime = localTime;
 
-        // 1) 仅回收已飞出屏幕或到期的槽位（飞行中绝不触碰 RectTransform！）
-        RecycleExpiredSlots();
+        UpdateActiveSlots();
 
-        // 2) 发射当前时间点到达的弹幕（单帧上限 8 条，保证极端弹幕雨也零卡顿）
         int spawnedThisFrame = 0;
         while (_cursor < _count && _times[_cursor] <= localTime && spawnedThisFrame < 8)
         {
-            if (localTime - _times[_cursor] <= 1.2f)
+            if (localTime - _times[_cursor] <= 1.5f)
             {
                 SpawnDanmaku(_texts[_cursor], _types[_cursor], _colors[_cursor], _sizes[_cursor], localTime);
                 spawnedThisFrame++;
             }
             _cursor++;
         }
-
-        // 3) 仅推进 1 个 GPU float 时钟（有新弹幕发射时才更新一次 Vector4[]）
-        FlushGpuUniforms();
-    }
-
-    private void FlushGpuUniforms()
-    {
-        if (danmakuGpuMaterial == null) return;
-        danmakuGpuMaterial.SetFloat(PropClock, _gpuClock);
-        if (_slotAnimDirty)
-        {
-            _slotAnimDirty = false;
-            danmakuGpuMaterial.SetVectorArray(PropSlotAnim, _slotAnim);
-        }
     }
 
     #endregion
 
-    #region GPU 弹幕发射与轨道防重叠
+    #region 弹幕发射与轨道防重叠
 
-    private void RecycleExpiredSlots()
+    private void UpdateActiveSlots()
     {
         int n = _slotActive != null ? _slotActive.Length : 0;
-        bool useCpuFallback = danmakuGpuMaterial == null;
-
         for (int i = 0; i < n; i++)
         {
             if (!_slotActive[i]) continue;
-            float elapsed = _gpuClock - _slotSpawnClock[i];
+            float elapsed = _clock - _slotSpawnClock[i];
             if (elapsed >= _slotDuration[i])
             {
                 _slotActive[i] = false;
@@ -415,11 +383,10 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
                 continue;
             }
 
-            if (useCpuFallback && _slotType[i] == 1 && _slotRects[i] != null)
+            if (_slotType[i] == 1 && _slotRects[i] != null)
             {
-                Vector3 p = _slotRects[i].anchoredPosition3D;
-                p.x = _slotStartX[i] - _slotSpeed[i] * elapsed;
-                _slotRects[i].anchoredPosition3D = p;
+                float x = _slotStartX[i] - _slotSpeed[i] * elapsed;
+                _slotRects[i].anchoredPosition = new Vector2(x, _slotY[i]);
             }
         }
     }
@@ -440,11 +407,9 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         txt.text = text;
         txt.color = IntToColor(colorInt, danmakuOpacity);
 
-        float width = Mathf.Max(60f, txt.preferredWidth + 16f);
+        float width = Mathf.Max(60f, txt.preferredWidth + 20f);
         float height = pixelSize + 12f;
         rt.sizeDelta = new Vector2(width, height);
-
-        float encodedZ = slot * SlotZStep;
 
         if (mode == 1)
         {
@@ -463,18 +428,15 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             _slotActive[slot] = true;
             _slotType[slot] = 1;
             _slotLane[slot] = lane;
-            _slotSpawnClock[slot] = _gpuClock;
+            _slotSpawnClock[slot] = _clock;
             _slotDuration[slot] = dur;
             _slotStartX[slot] = startX;
             _slotSpeed[slot] = speed;
+            _slotY[slot] = y;
             _slotWidth[slot] = width;
             _scrollLaneOwner[lane] = slot;
 
-            // GPU 模式下 RectTransform 永远静止在 (0, y, encodedZ)，全部水平位移交给 GPU 顶点着色器！
-            rt.anchoredPosition3D = new Vector3(danmakuGpuMaterial != null ? 0f : startX, y, encodedZ);
-            _slotAnim[slot] = new Vector4(startX, speed, _gpuClock, 1f);
-            _slotAnimDirty = true;
-
+            rt.anchoredPosition = new Vector2(startX, y);
             txt.alignment = TextAnchor.MiddleCenter;
             txt.gameObject.SetActive(true);
         }
@@ -487,15 +449,13 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             _slotActive[slot] = true;
             _slotType[slot] = 5;
             _slotLane[slot] = lane;
-            _slotSpawnClock[slot] = _gpuClock;
+            _slotSpawnClock[slot] = _clock;
             _slotDuration[slot] = FixedDurationSec;
+            _slotY[slot] = y;
             _slotWidth[slot] = width;
             _topLaneFreeAt[lane] = localTime + FixedDurationSec;
 
-            rt.anchoredPosition3D = new Vector3(0f, y, encodedZ);
-            _slotAnim[slot] = new Vector4(0f, 0f, _gpuClock, 0f);
-            _slotAnimDirty = true;
-
+            rt.anchoredPosition = new Vector2(0f, y);
             txt.alignment = TextAnchor.MiddleCenter;
             txt.gameObject.SetActive(true);
         }
@@ -508,15 +468,13 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             _slotActive[slot] = true;
             _slotType[slot] = 4;
             _slotLane[slot] = lane;
-            _slotSpawnClock[slot] = _gpuClock;
+            _slotSpawnClock[slot] = _clock;
             _slotDuration[slot] = FixedDurationSec;
+            _slotY[slot] = y;
             _slotWidth[slot] = width;
             _bottomLaneFreeAt[lane] = localTime + FixedDurationSec;
 
-            rt.anchoredPosition3D = new Vector3(0f, y, encodedZ);
-            _slotAnim[slot] = new Vector4(0f, 0f, _gpuClock, 0f);
-            _slotAnimDirty = true;
-
+            rt.anchoredPosition = new Vector2(0f, y);
             txt.alignment = TextAnchor.MiddleCenter;
             txt.gameObject.SetActive(true);
         }
@@ -524,11 +482,10 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
         _spawnedTotalCount++;
         if (_spawnedTotalCount == 1 && enableDebugLog)
         {
-            Debug.Log(LogPrefix + " 首条弹幕已上屏渲染 | 画布半尺寸: " + _canvasHalfW.ToString("F0") + "x" + _canvasHalfH.ToString("F0") + " | 内容: " + text);
+            Debug.Log(LogPrefix + " 首条弹幕已上屏 | 内容: " + text);
         }
     }
 
-    // O(1) 均摊环形扫描查找空闲槽位
     private int FindFreeSlotRing()
     {
         int n = _slotActive.Length;
@@ -551,7 +508,7 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
             int owner = _scrollLaneOwner[lane];
             if (owner < 0 || !_slotActive[owner]) return lane;
 
-            float elapsed = _gpuClock - _slotSpawnClock[owner];
+            float elapsed = _clock - _slotSpawnClock[owner];
             float curX = _slotStartX[owner] - _slotSpeed[owner] * elapsed;
             float rightEdge = curX + _slotWidth[owner] * 0.5f;
             if (rightEdge < _canvasHalfW - 48f) return lane;
@@ -634,7 +591,18 @@ public class SleepDanmakuOverlay : UdonSharpBehaviour
     private int FindDanmakuArrayStart(string json)
     {
         int idx = json.IndexOf("\"comments\"");
-        if (idx < 0) idx = json.IndexOf("\"danmaku\"");
+        if (idx >= 0)
+        {
+            int b = json.IndexOf('[', idx);
+            if (b >= 0 && b + 1 < json.Length)
+            {
+                // 若 comments 为空数组 []，尝试回退到 danmaku 数组
+                int nextNonSpace = b + 1;
+                while (nextNonSpace < json.Length && (json[nextNonSpace] == ' ' || json[nextNonSpace] == '\n' || json[nextNonSpace] == '\r' || json[nextNonSpace] == '\t')) nextNonSpace++;
+                if (nextNonSpace < json.Length && json[nextNonSpace] != ']') return b + 1;
+            }
+        }
+        idx = json.IndexOf("\"danmaku\"");
         if (idx < 0) return -1;
         int bracket = json.IndexOf('[', idx);
         return bracket >= 0 ? bracket + 1 : -1;
