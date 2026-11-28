@@ -19,7 +19,7 @@
 
 ## 快速使用（VCC / ALCOM）
 1. 在 VCC 或 ALCOM 中添加本仓库的 VPM Listing 地址：
-   - 本仓库 VPM 地址：`https://xiaoxnmv.github.io/SleepMusicPlayer-VPM/index.json`
+   - 本仓库 VPM 地址：`https://vrc-lpos.github.io/SleepMusicPlayer-VPM/index.json`
    - 依赖：仅 `com.vrchat.worlds >= 3.7.0`（无需安装任何特定视频播放器！）
 2. 在项目里安装 **SleepMusic Player (眠境音乐歌词播放器)**。
 3. 在 Unity 场景中右键 **`GameObject -> 眠境音乐播放器 -> 创建开箱即用播放器`**（或直接拖入 `Packages/com.miaobai.sleep-music-player/Prefabs/SleepMusicPlayer (All-in-One).prefab`）。

@@ -1,8 +1,8 @@
 {
   "name": "SleepMusic VPM Listing",
-  "id": "com.xiaoxnmv.sleep-music-vpm",
-  "url": "https://xiaoxnmv.github.io/SleepMusicPlayer-VPM/index.json",
-  "author": "xiaoxnmv",
+  "id": "com.vrc-lpos.sleep-music-vpm",
+  "url": "https://vrc-lpos.github.io/SleepMusicPlayer-VPM/index.json",
+  "author": "vrc-lpos",
   "packages": {
     "com.miaobai.sleep-music-player": {
       "versions": {
@@ -14,18 +14,18 @@
           "description": "基于 VizVid 的毛玻璃双行胶囊播放器，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键接口/音乐池配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0",
             "idv.jlchntoz.vvmw": ">=1.8.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.0.0/com.miaobai.sleep-music-player-1.0.0.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.0.0/com.miaobai.sleep-music-player-1.0.0.zip",
           "zipSHA256": "328d8acd9265a7b795468ba04d1325834576aed07b50cff893cf5a9fe531844c"
         },
         "1.1.1": {
@@ -36,18 +36,18 @@
           "description": "基于 VizVid 的毛玻璃双行胶囊播放器，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键接口/音乐池配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0",
             "idv.jlchntoz.vvmw": ">=1.8.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.1/com.miaobai.sleep-music-player-1.1.1.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.1/com.miaobai.sleep-music-player-1.1.1.zip",
           "zipSHA256": "ba274613b8d1a1831a5dce13ff34c2366346e9792b6ff04450f60a8dfd37683d"
         },
         "1.1.2": {
@@ -58,18 +58,18 @@
           "description": "基于 VizVid 的毛玻璃双行胶囊播放器，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键接口/音乐池配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0",
             "idv.jlchntoz.vvmw": ">=1.8.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.2/com.miaobai.sleep-music-player-1.1.2.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.2/com.miaobai.sleep-music-player-1.1.2.zip",
           "zipSHA256": "778b7e8ee2964fce3e510250e7b3785a22ae6f8622e6ea74e106c5d53ff9f1bd"
         },
         "1.1.3": {
@@ -80,18 +80,18 @@
           "description": "基于 VizVid 的毛玻璃双行胶囊播放器，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键接口/音乐池配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0",
             "idv.jlchntoz.vvmw": ">=1.8.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.3/com.miaobai.sleep-music-player-1.1.3.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.3/com.miaobai.sleep-music-player-1.1.3.zip",
           "zipSHA256": "7ba7269323a7520f378c26ee20538d3b90a331c55a5eca66fd27c3308f354624"
         },
         "1.1.4": {
@@ -102,17 +102,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.4/com.miaobai.sleep-music-player-1.1.4.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.4/com.miaobai.sleep-music-player-1.1.4.zip",
           "zipSHA256": "9f36e742705aa41f38a26b2f6ac6cc9f509866b16535b24922756880d9e3076e"
         },
         "1.1.5": {
@@ -123,17 +123,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.5/com.miaobai.sleep-music-player-1.1.5.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.5/com.miaobai.sleep-music-player-1.1.5.zip",
           "zipSHA256": "510a8516f5c025e6b4206bbc864683a9f91d1fe7139976720f39f101156a6952"
         },
         "1.1.6": {
@@ -144,17 +144,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.6/com.miaobai.sleep-music-player-1.1.6.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.6/com.miaobai.sleep-music-player-1.1.6.zip",
           "zipSHA256": "d88d3b36f70bb875be340262f2b72662654e046cb31d32c5cb51557df1235360"
         },
         "1.1.7": {
@@ -165,17 +165,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.7/com.miaobai.sleep-music-player-1.1.7.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.7/com.miaobai.sleep-music-player-1.1.7.zip",
           "zipSHA256": "11234cf9bb6db7541b9198af1d493eb141879d9b1dadcd526dd6151f59bdb097"
         },
         "1.1.8": {
@@ -186,17 +186,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.8/com.miaobai.sleep-music-player-1.1.8.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.8/com.miaobai.sleep-music-player-1.1.8.zip",
           "zipSHA256": "43cb1f6da0a30607b16982e2dcde58654050b78113804b0946312b7a35223fd9"
         },
         "1.1.9": {
@@ -207,17 +207,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.9/com.miaobai.sleep-music-player-1.1.9.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.9/com.miaobai.sleep-music-player-1.1.9.zip",
           "zipSHA256": "952d76d03a0129c7618ad7e30a46bd83e5d96dd0f36a6858ece272c776fae735"
         },
         "1.1.10": {
@@ -228,17 +228,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.10/com.miaobai.sleep-music-player-1.1.10.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.10/com.miaobai.sleep-music-player-1.1.10.zip",
           "zipSHA256": "9d2d913e5072c7176e5a42b5b5c0fb88c5a2dfdd92e20562b2a1fe6e50d1158e"
         },
         "1.1.11": {
@@ -249,17 +249,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.11/com.miaobai.sleep-music-player-1.1.11.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.11/com.miaobai.sleep-music-player-1.1.11.zip",
           "zipSHA256": "af4f95e8b16fbc5ad16d1684f9ab2507f28376b68b96aeed306f517bee8095b6"
         },
         "1.1.12": {
@@ -270,17 +270,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.12/com.miaobai.sleep-music-player-1.1.12.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.12/com.miaobai.sleep-music-player-1.1.12.zip",
           "zipSHA256": "da3e239ef5f2321d9db79f65a38d514f015c699e959528c919c9eeb1c1e3e4f6"
         },
         "1.1.13": {
@@ -291,17 +291,17 @@
           "description": "支持任意 VRChat 视频播放器（VizVid / ProTV / YamaPlayer / IWsync / USharpVideo / 原生 VRCVideoPlayer）的通用 GPU 音乐歌词舞台，内置 GPU BC1 封面解码、无重影流体光晕背景、歌词逐字暖金上色、VRC 中文性能日志与一键绑定/接口配置。",
           "license": "MIT",
           "vrchatVersion": "2022.3.22",
-          "documentationUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM#readme",
-          "changelogUrl": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases",
+          "documentationUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM#readme",
+          "changelogUrl": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases",
           "hideInEditor": false,
           "vpmDependencies": {
             "com.vrchat.worlds": ">=3.7.0"
           },
           "author": {
-            "name": "xiaoxnmv",
-            "url": "https://github.com/xiaoxnmv"
+            "name": "vrc-lpos",
+            "url": "https://github.com/vrc-lpos"
           },
-          "url": "https://github.com/xiaoxnmv/SleepMusicPlayer-VPM/releases/download/v1.1.13/com.miaobai.sleep-music-player-1.1.13.zip",
+          "url": "https://github.com/vrc-lpos/SleepMusicPlayer-VPM/releases/download/v1.1.13/com.miaobai.sleep-music-player-1.1.13.zip",
           "zipSHA256": "25eff3ac0a1b96808655538a8baa68bd04ac57c8bac0e566d2d0db35e2eeac21"
         }
       }

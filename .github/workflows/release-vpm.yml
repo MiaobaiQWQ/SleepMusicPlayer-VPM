@@ -63,8 +63,8 @@ jobs:
                   h.update(chunk)
           digest = h.hexdigest()
 
-          owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "xiaoxnmv")
-          repo = os.environ.get("GITHUB_REPOSITORY", "xiaoxnmv/SleepMusicPlayer-VPM").split("/")[-1]
+          owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "vrc-lpos")
+          repo = os.environ.get("GITHUB_REPOSITORY", "vrc-lpos/SleepMusicPlayer-VPM").split("/")[-1]
           listing_url = f"https://{owner.lower()}.github.io/{repo}/index.json"
           download_url = f"https://github.com/{owner}/{repo}/releases/download/v{version}/{zip_name}"
 
