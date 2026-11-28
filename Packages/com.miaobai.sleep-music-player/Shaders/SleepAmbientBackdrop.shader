@@ -10,11 +10,14 @@ Shader "SleepSanctuary/GPU/MusicAmbientBackdrop"
         _BlurRadius ("流体模糊半径", Range(0.05, 0.35)) = 0.24
         _MipLevel ("背景采样 Mip 层级", Range(3.0, 7.0)) = 6.0
         _DimFactor ("护眼压暗系数", Range(0.1, 0.7)) = 0.36
+        _CurveAngle ("曲面屏总弧度 (rad)", Range(-1.58, 1.58)) = 0.0
+        _StageWidth ("舞台画布宽度 (px)", Float) = 1920.0
+        _MeshRect ("细分网格映射 (cx,cy,w,h)", Vector) = (0, 0, 0, 0)
     }
 
     SubShader
     {
-        Tags { "Queue"="Transparent" "RenderType"="Transparent" "IgnoreProjector"="True" }
+        Tags { "Queue"="Transparent-2" "RenderType"="Transparent" "IgnoreProjector"="True" }
         Cull Off ZWrite Off Blend SrcAlpha OneMinusSrcAlpha
 
         Pass
@@ -25,8 +28,18 @@ Shader "SleepSanctuary/GPU/MusicAmbientBackdrop"
             #pragma target 3.0
             #include "UnityCG.cginc"
 
-            struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; };
-            struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
+            struct appdata
+            {
+                float4 vertex : POSITION;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+            struct v2f
+            {
+                float4 pos : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
 
             sampler2D _MainTex;
             float _HasCover;
@@ -35,11 +48,32 @@ Shader "SleepSanctuary/GPU/MusicAmbientBackdrop"
             float _BlurRadius;
             float _MipLevel;
             float _DimFactor;
+            float _CurveAngle;
+            float _StageWidth;
+            float4 _MeshRect;
 
             v2f vert(appdata v)
             {
                 v2f o;
-                o.pos = UnityObjectToClipPos(v.vertex);
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                float3 p = v.vertex.xyz;
+                if (_MeshRect.z > 1.0)
+                {
+                    p.x = _MeshRect.x + v.vertex.x * _MeshRect.z;
+                    p.y = _MeshRect.y + v.vertex.y * _MeshRect.w;
+                }
+                if (abs(_CurveAngle) > 0.001)
+                {
+                    float halfW = max(100.0, _StageWidth * 0.5);
+                    float halfAng = abs(_CurveAngle) * 0.5;
+                    float radius = halfW / max(0.001, halfAng);
+                    float sgn = _CurveAngle >= 0.0 ? 1.0 : -1.0;
+                    float theta = (p.x / halfW) * halfAng;
+                    p.x = radius * sin(theta);
+                    p.z -= sgn * radius * (1.0 - cos(theta));
+                }
+                o.pos = UnityObjectToClipPos(float4(p, 1.0));
                 o.uv = v.uv;
                 return o;
             }

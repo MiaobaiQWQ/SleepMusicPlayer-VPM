@@ -27,6 +27,9 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private const string PropStartX = "_StartX";
     private const string PropTextWidth = "_TextWidth";
     private const string PropSweep = "_Sweep";
+    private const string PropCurveAngle = "_CurveAngle";
+    private const string PropStageWidth = "_StageWidth";
+    private const string PropMeshRect = "_MeshRect";
 
     private const string KeySongName = "\"song_name\"";
     private const string KeyTitle = "\"title\"";
@@ -169,6 +172,34 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     [Tooltip("是否在 VRChat 控制台输出详细中文性能日志")]
     public bool enableVrcDebugLog = true;
 
+    [Header("全屏自适应排版与曲面屏适配")]
+    [Tooltip("整体内容大小倍率（同步缩放封面、歌名、歌词与翻译尺寸）")]
+    [Range(0.5f, 1.8f)]
+    public float contentScale = 1.0f;
+
+    [Tooltip("屏幕左右边距占总宽度的比例（越小内容越铺满全屏）")]
+    [Range(0.02f, 0.20f)]
+    public float horizontalMarginRatio = 0.045f;
+
+    [Tooltip("曲面屏总弯曲角度（度）：0 为平面，正数为内凹环绕曲面屏，负数为外凸曲面屏")]
+    [Range(-90f, 90f)]
+    public float screenCurveDegrees = 0f;
+
+    [Tooltip("曲面屏文字材质（SleepSanctuary/GPU/CurvedUIText，确保副歌词/歌名/翻译同步弯曲）")]
+    public Material curvedTextMat;
+
+    [Tooltip("曲面屏细分背景网格渲染器（弯曲时自动替代 4 顶点 RawImage）")]
+    public MeshRenderer curvedBackdropRenderer;
+
+    [Tooltip("曲面屏细分封面网格渲染器（弯曲时自动替代 4 顶点 RawImage）")]
+    public MeshRenderer curvedCoverRenderer;
+
+    [Tooltip("平面背景 RawImage（弯曲时自动隐藏并切换为细分网格）")]
+    public RawImage flatBackdropImage;
+
+    [Tooltip("平面封面 RawImage（弯曲时自动隐藏并切换为细分网格）")]
+    public RawImage flatCoverImage;
+
     #endregion
 
     #region 运行时状态
@@ -255,11 +286,329 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private void Start()
     {
-        CacheLyricLayout();
+        if (danmakuOverlay == null) danmakuOverlay = GetComponentInChildren<SleepDanmakuOverlay>(true);
+        ApplyResponsiveLayout();
         if (musicStageRoot != null) musicStageRoot.SetActive(false);
         if (controlBarRoot != null && (hideControlBar || stageOnlyMode)) controlBarRoot.SetActive(false);
         SetCoverBlend(0f);
         if (!stageOnlyMode) RestoreFixedPrefixIfEmpty();
+    }
+
+    // 获取当前舞台画布的逻辑宽高（兼容 16:9 / 21:9 / 32:9 / 4:3 等任意比例屏幕）
+    private Vector2 GetStageLogicalSize()
+    {
+        if (musicStageRoot != null)
+        {
+            Canvas parentCanvas = musicStageRoot.GetComponentInParent<Canvas>();
+            if (parentCanvas != null)
+            {
+                RectTransform crt = parentCanvas.GetComponent<RectTransform>();
+                if (crt != null && crt.sizeDelta.x > 100f && crt.sizeDelta.y > 100f) return crt.sizeDelta;
+            }
+            RectTransform rt = musicStageRoot.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                float w = rt.rect.width;
+                float h = rt.rect.height;
+                if (w > 100f && h > 100f) return new Vector2(w, h);
+                if (rt.sizeDelta.x > 100f && rt.sizeDelta.y > 100f) return rt.sizeDelta;
+            }
+        }
+        return new Vector2(1920f, 1080f);
+    }
+
+    /// <summary>
+    /// 根据当前屏幕画布尺寸与用户缩放/留白参数，自适应铺满整个屏幕重新排布封面、歌名、分割线、5 行歌词与翻译。
+    /// </summary>
+    public void ApplyResponsiveLayout()
+    {
+        if (musicStageRoot != null)
+        {
+            Transform rootT = musicStageRoot.transform;
+            if (coverCardRect == null)
+            {
+                Transform cardT = rootT.Find("GPU_AlbumCoverCard");
+                if (cardT != null) coverCardRect = cardT.GetComponent<RectTransform>();
+            }
+            if (centerDividerObject == null)
+            {
+                Transform divT = rootT.Find("Divider_Vertical");
+                if (divT != null) centerDividerObject = divT.gameObject;
+            }
+            if (flatBackdropImage == null)
+            {
+                Transform bgT = rootT.Find("GPU_AmbientBackdrop");
+                if (bgT != null) flatBackdropImage = bgT.GetComponent<RawImage>();
+            }
+            if (flatCoverImage == null && coverCardRect != null)
+            {
+                flatCoverImage = coverCardRect.GetComponent<RawImage>();
+            }
+        }
+
+        Vector2 stageSize = GetStageLogicalSize();
+        float W = Mathf.Max(640f, stageSize.x);
+        float H = Mathf.Max(480f, stageSize.y);
+        float s = Mathf.Clamp(contentScale, 0.5f, 1.8f);
+        float marginX = W * Mathf.Clamp(horizontalMarginRatio, 0.02f, 0.20f);
+        float usableW = Mathf.Max(400f, W - marginX * 2f);
+        float usableH = Mathf.Max(360f, H * 0.88f);
+        float hScale = H / 1080f;
+
+        // 左侧封面栏宽度：宽屏/带鱼屏自动控制比例，把更宽阔的区域留给右侧歌词与翻译，整体铺满全屏不聚拢在中间
+        float leftColW = Mathf.Clamp(usableW * 0.34f, H * 0.40f, H * 0.66f);
+        float leftEdge = -W * 0.5f + marginX;
+        float leftCenterX = leftEdge + leftColW * 0.5f;
+        float colGap = Mathf.Clamp(usableW * 0.032f, 36f, 110f);
+        float dividerX = leftEdge + leftColW + colGap * 0.5f;
+
+        float rightLeft = leftEdge + leftColW + colGap;
+        float rightRight = W * 0.5f - marginX;
+        float rightColW = Mathf.Max(320f, rightRight - rightLeft);
+        float rightCenterX = (rightLeft + rightRight) * 0.5f;
+
+        // 1) 左侧正方形专辑封面卡片（绝不拉伸变形）
+        float cardSize = Mathf.Clamp(Mathf.Min(leftColW * 0.86f, usableH * 0.56f) * s, 160f, usableH * 0.68f);
+        float cardY = H * 0.115f;
+        if (coverCardRect != null)
+        {
+            coverCardRect.anchorMin = new Vector2(0.5f, 0.5f);
+            coverCardRect.anchorMax = new Vector2(0.5f, 0.5f);
+            coverCardRect.pivot = new Vector2(0.5f, 0.5f);
+            coverCardRect.sizeDelta = new Vector2(cardSize, cardSize);
+            coverCardRect.anchoredPosition = new Vector2(leftCenterX, cardY);
+        }
+
+        // 2) 歌名、歌手与状态徽章
+        float titleH = Mathf.Clamp(64f * hScale * s, 38f, 100f);
+        float titleY = cardY - cardSize * 0.5f - titleH * 0.72f;
+        int titleFont = Mathf.RoundToInt(Mathf.Clamp(42f * hScale * s, 20f, 76f));
+        if (songTitleText != null)
+        {
+            RectTransform rt = songTitleText.rectTransform;
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(leftColW * 0.96f, titleH);
+            rt.anchoredPosition = new Vector2(leftCenterX, titleY);
+            songTitleText.fontSize = titleFont;
+            songTitleText.resizeTextForBestFit = true;
+            songTitleText.resizeTextMaxSize = titleFont;
+            songTitleText.resizeTextMinSize = Mathf.Max(14, titleFont / 2);
+        }
+
+        float artistH = Mathf.Clamp(48f * hScale * s, 28f, 76f);
+        float artistY = titleY - (titleH * 0.5f + artistH * 0.55f);
+        int artistFont = Mathf.RoundToInt(Mathf.Clamp(28f * hScale * s, 16f, 52f));
+        if (songArtistText != null)
+        {
+            RectTransform rt = songArtistText.rectTransform;
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(leftColW * 0.96f, artistH);
+            rt.anchoredPosition = new Vector2(leftCenterX, artistY);
+            songArtistText.fontSize = artistFont;
+            songArtistText.resizeTextForBestFit = true;
+            songArtistText.resizeTextMaxSize = artistFont;
+            songArtistText.resizeTextMinSize = Mathf.Max(12, artistFont / 2);
+        }
+
+        float statusH = Mathf.Clamp(40f * hScale * s, 24f, 64f);
+        float statusY = artistY - (artistH * 0.5f + statusH * 0.65f);
+        int statusFont = Mathf.RoundToInt(Mathf.Clamp(22f * hScale * s, 14f, 40f));
+        if (statusBadgeText != null)
+        {
+            RectTransform rt = statusBadgeText.rectTransform;
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(leftColW * 0.96f, statusH);
+            rt.anchoredPosition = new Vector2(leftCenterX, statusY);
+            statusBadgeText.fontSize = statusFont;
+            statusBadgeText.resizeTextForBestFit = true;
+            statusBadgeText.resizeTextMaxSize = statusFont;
+            statusBadgeText.resizeTextMinSize = Mathf.Max(12, statusFont / 2);
+        }
+
+        // 3) 垂直分割线
+        if (centerDividerObject != null)
+        {
+            RectTransform divRt = centerDividerObject.GetComponent<RectTransform>();
+            if (divRt != null)
+            {
+                divRt.anchorMin = new Vector2(0.5f, 0.5f);
+                divRt.anchorMax = new Vector2(0.5f, 0.5f);
+                divRt.pivot = new Vector2(0.5f, 0.5f);
+                divRt.sizeDelta = new Vector2(Mathf.Clamp(3f * s, 2f, 6f), usableH * 0.72f);
+                divRt.anchoredPosition = new Vector2(dividerX, 0f);
+            }
+        }
+
+        // 4) 右侧 5 行歌词与双语翻译：自适应铺满整个右侧屏幕宽度与高度
+        float activeY = H * 0.045f;
+        float rowStep = Mathf.Clamp(usableH * 0.175f * Mathf.Lerp(1f, s, 0.35f), 74f * hScale, usableH * 0.215f);
+        float[] lineOffsets = new float[] { rowStep * 2.02f, rowStep * 1.04f, 0f, -rowStep * 1.38f, -rowStep * 2.24f };
+        float wideBoost = Mathf.Lerp(1f, Mathf.Clamp(W / 1920f, 0.88f, 1.35f), 0.35f);
+        int activeFont = Mathf.RoundToInt(Mathf.Clamp(58f * hScale * wideBoost * s, 26f, 108f));
+        int nearFont = Mathf.RoundToInt(Mathf.Clamp(39f * hScale * wideBoost * s, 18f, 74f));
+        int farFont = Mathf.RoundToInt(Mathf.Clamp(31f * hScale * wideBoost * s, 16f, 58f));
+
+        if (lyricLineTexts != null)
+        {
+            for (int i = 0; i < lyricLineTexts.Length; i++)
+            {
+                Text t = lyricLineTexts[i];
+                if (t == null) continue;
+                RectTransform rt = t.rectTransform;
+                rt.anchorMin = new Vector2(0.5f, 0.5f);
+                rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+
+                int fSize = i == 2 ? activeFont : ((i == 1 || i == 3) ? nearFont : farFont);
+                float lineH = Mathf.Clamp(fSize * 1.55f, 44f, rowStep * 1.2f);
+                float yPos = i < lineOffsets.Length ? (activeY + lineOffsets[i]) : (activeY - rowStep * 2.2f);
+
+                rt.sizeDelta = new Vector2(rightColW, lineH);
+                rt.anchoredPosition = new Vector2(rightCenterX, yPos);
+                t.fontSize = fSize;
+                t.resizeTextForBestFit = true;
+                t.resizeTextMaxSize = fSize;
+                t.resizeTextMinSize = Mathf.Max(14, fSize / 2);
+            }
+        }
+
+        if (activeTranslationText != null)
+        {
+            int transFont = Mathf.RoundToInt(Mathf.Clamp(32f * hScale * s, 16f, 58f));
+            RectTransform rt = activeTranslationText.rectTransform;
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(rightColW, Mathf.Clamp(transFont * 1.55f, 36f, rowStep * 0.85f));
+            rt.anchoredPosition = new Vector2(rightCenterX, activeY - rowStep * 0.66f);
+            activeTranslationText.fontSize = transFont;
+            activeTranslationText.resizeTextForBestFit = true;
+            activeTranslationText.resizeTextMaxSize = transFont;
+            activeTranslationText.resizeTextMinSize = Mathf.Max(12, transFont / 2);
+        }
+
+        _leftColumnBaseX = leftCenterX;
+        _layoutCached = false;
+        CacheLyricLayout();
+
+        if (_isInstrumentalMode)
+        {
+            ApplyContentLayoutMode(true);
+        }
+
+        if (activeLyricGpuMat != null && lyricLineTexts != null && lyricLineTexts.Length > 2 && lyricLineTexts[2] != null)
+        {
+            RectTransform art = lyricLineTexts[2].rectTransform;
+            float startX = art.anchoredPosition.x - art.rect.width * art.pivot.x;
+            activeLyricGpuMat.SetFloat(PropStartX, startX);
+            float prefW = lyricLineTexts[2].preferredWidth;
+            if (prefW > 20f)
+            {
+                _activeExactWidth = Mathf.Clamp(prefW, 40f, art.rect.width);
+                activeLyricGpuMat.SetFloat(PropTextWidth, _activeExactWidth);
+            }
+        }
+
+        ApplyScreenCurvature();
+    }
+
+    /// <summary>
+    /// 将当前屏幕曲率（screenCurveDegrees）与画布宽度同步推送至全部 GPU 着色器，并在曲面模式下启用细分网格。
+    /// </summary>
+    public void ApplyScreenCurvature()
+    {
+        Vector2 stageSize = GetStageLogicalSize();
+        float W = Mathf.Max(640f, stageSize.x);
+        float H = Mathf.Max(480f, stageSize.y);
+        float rad = Mathf.Clamp(screenCurveDegrees, -90f, 90f) * Mathf.Deg2Rad;
+        bool isCurved = Mathf.Abs(screenCurveDegrees) > 0.25f;
+        Canvas parentCanvas = musicStageRoot != null ? musicStageRoot.GetComponentInParent<Canvas>() : null;
+        int canvasOrder = parentCanvas != null ? parentCanvas.sortingOrder : 0;
+
+        if (ambientBackdropMat != null)
+        {
+            ambientBackdropMat.renderQueue = 2998;
+            ambientBackdropMat.SetFloat(PropCurveAngle, rad);
+            ambientBackdropMat.SetFloat(PropStageWidth, W);
+            bool useMeshBg = isCurved && curvedBackdropRenderer != null;
+            ambientBackdropMat.SetVector(PropMeshRect, useMeshBg ? new Vector4(0f, 0f, W, H) : Vector4.zero);
+            if (curvedBackdropRenderer != null)
+            {
+                curvedBackdropRenderer.sortingOrder = canvasOrder - 2;
+                curvedBackdropRenderer.gameObject.SetActive(useMeshBg);
+            }
+            if (flatBackdropImage != null) flatBackdropImage.enabled = !useMeshBg;
+        }
+
+        if (albumCardMat != null)
+        {
+            albumCardMat.renderQueue = 2999;
+            albumCardMat.SetFloat(PropCurveAngle, rad);
+            albumCardMat.SetFloat(PropStageWidth, W);
+            bool useMeshCover = isCurved && curvedCoverRenderer != null && coverCardRect != null;
+            if (useMeshCover)
+            {
+                Vector2 cp = coverCardRect.anchoredPosition;
+                Vector2 cs = coverCardRect.sizeDelta;
+                albumCardMat.SetVector(PropMeshRect, new Vector4(cp.x, cp.y, cs.x, cs.y));
+            }
+            else
+            {
+                albumCardMat.SetVector(PropMeshRect, Vector4.zero);
+            }
+            if (curvedCoverRenderer != null)
+            {
+                curvedCoverRenderer.sortingOrder = canvasOrder - 1;
+                curvedCoverRenderer.gameObject.SetActive(useMeshCover);
+            }
+            if (flatCoverImage != null) flatCoverImage.enabled = !useMeshCover;
+        }
+
+        if (activeLyricGpuMat != null)
+        {
+            activeLyricGpuMat.renderQueue = 3002;
+            activeLyricGpuMat.SetFloat(PropCurveAngle, rad);
+            activeLyricGpuMat.SetFloat(PropStageWidth, W);
+        }
+
+        if (curvedTextMat != null)
+        {
+            curvedTextMat.renderQueue = 3002;
+            curvedTextMat.SetFloat(PropCurveAngle, rad);
+            curvedTextMat.SetFloat(PropStageWidth, W);
+
+            if (isCurved)
+            {
+                if (songTitleText != null) songTitleText.material = curvedTextMat;
+                if (songArtistText != null) songArtistText.material = curvedTextMat;
+                if (statusBadgeText != null) statusBadgeText.material = curvedTextMat;
+                if (activeTranslationText != null) activeTranslationText.material = curvedTextMat;
+                if (lyricLineTexts != null)
+                {
+                    for (int i = 0; i < lyricLineTexts.Length; i++)
+                    {
+                        if (i != 2 && lyricLineTexts[i] != null) lyricLineTexts[i].material = curvedTextMat;
+                    }
+                }
+                if (centerDividerObject != null)
+                {
+                    Image divImg = centerDividerObject.GetComponent<Image>();
+                    if (divImg != null) divImg.material = curvedTextMat;
+                }
+            }
+        }
+
+        if (danmakuOverlay != null)
+        {
+            danmakuOverlay.RefreshCanvasBounds();
+            danmakuOverlay.ApplyScreenCurvature(screenCurveDegrees, W);
+        }
     }
 
     // 缓存 5 行歌词与翻译的初始位置与透明度，供切行滚动动画复用
@@ -350,6 +699,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             }
         }
         if (activeTranslationText != null) activeTranslationText.gameObject.SetActive(!instrumental);
+        ApplyScreenCurvature();
     }
 
     private void Update()
@@ -414,12 +764,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     private bool HasAnyPlayerBound()
     {
-        if (playerController != null || rawUdonPlayer != null) return true;
+        if (Utilities.IsValid(playerController) || Utilities.IsValid(rawUdonPlayer)) return true;
         if (videoPlayers != null)
         {
             for (int i = 0; i < videoPlayers.Length; i++)
             {
-                if (videoPlayers[i] != null) return true;
+                if (Utilities.IsValid(videoPlayers[i])) return true;
             }
         }
         return false;
@@ -432,7 +782,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         for (int i = 0; i < videoPlayers.Length; i++)
         {
             BaseVRCVideoPlayer vp = videoPlayers[i];
-            if (vp == null) continue;
+            if (!Utilities.IsValid(vp) || !vp.gameObject.activeInHierarchy || !vp.enabled) continue;
             if (vp.IsPlaying) return vp;
             if (readyFallback == null && vp.IsReady) readyFallback = vp;
         }
@@ -442,12 +792,12 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     private object ReadPlayerVar(string varName)
     {
         if (string.IsNullOrEmpty(varName)) return null;
-        if (playerController != null)
+        if (Utilities.IsValid(playerController))
         {
             object v = playerController.GetProgramVariable(varName);
             if (v != null) return v;
         }
-        if (rawUdonPlayer != null)
+        if (Utilities.IsValid(rawUdonPlayer))
         {
             object v = rawUdonPlayer.GetProgramVariable(varName);
             if (v != null) return v;
@@ -535,8 +885,6 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
         VRCUrl u = ReadPlayerUrlVar("localUrl");
         if (!VRCUrl.IsNullOrEmpty(u)) return u;
-        u = ReadPlayerUrlVar("loadingUrl");
-        if (!VRCUrl.IsNullOrEmpty(u)) return u;
         u = ReadPlayerUrlVar("url");
         if (!VRCUrl.IsNullOrEmpty(u)) return u;
         u = ReadPlayerUrlVar("syncedURL");
@@ -569,9 +917,10 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
         {
             for (int i = 0; i < videoPlayers.Length; i++)
             {
-                if (videoPlayers[i] != null)
+                BaseVRCVideoPlayer vp = videoPlayers[i];
+                if (Utilities.IsValid(vp) && vp.gameObject.activeInHierarchy && vp.enabled)
                 {
-                    videoPlayers[i].PlayURL(targetUrl);
+                    vp.PlayURL(targetUrl);
                     return true;
                 }
             }
@@ -694,6 +1043,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             HideMusicStageOnly();
             if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
             {
+                if (!danmakuOverlay.gameObject.activeSelf) danmakuOverlay.gameObject.SetActive(true);
                 _pendingIsDanmaku = true;
                 LogInfo("弹幕拉取", "检测到视频弹幕链接，开始拉取弹幕 | 链接: " + urlText);
                 StartStringFetch(currentUrl, false, "");
@@ -782,6 +1132,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
             HideMusicStageOnly();
             if (danmakuOverlay != null && danmakuOverlay.enableDanmaku)
             {
+                if (!danmakuOverlay.gameObject.activeSelf) danmakuOverlay.gameObject.SetActive(true);
                 int loaded = danmakuOverlay.LoadFromJson(json);
                 LogInfo("弹幕就绪", "网络耗时 " + FormatMs(fetchMs) + " | 首批加载 " + loaded + " 条弹幕");
             }
@@ -842,6 +1193,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
 
     public override void OnStringLoadError(IVRCStringDownload result)
     {
+        _pendingIsDanmaku = false;
         float fetchMs = ElapsedMs(_stringFetchStartTime);
         int code = result != null ? result.ErrorCode : 0;
         string rawError = result != null ? result.Error : "";
@@ -1261,7 +1613,7 @@ public class SleepMusicLyricsController : UdonSharpBehaviour
     {
         float px = 0f;
         for (int i = 0; i < text.Length; i++) px += text[i] > 127 ? 56f : 28f;
-        return Mathf.Clamp(px, 140f, 840f);
+        return Mathf.Clamp(px, 140f, 2800f);
     }
 
     private string FindMatchingTranslation(int idx)

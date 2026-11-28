@@ -156,7 +156,15 @@ public static class SleepMusicConfigUtility
             EnsureInputPrefixInitialized(ctrl);
         }
 
-        // 4) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
+        // 4) 自动绑定弹幕叠加层（若尚未指定，优先在自身子树、目标播放器子树及全场景查找）
+        if (ctrl.danmakuOverlay == null)
+        {
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = targetRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+
+        // 5) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
         if (ctrl.stageOnlyMode)
         {
             AutoFitToTargetScreen(ctrl, targetRoot);
@@ -199,36 +207,344 @@ public static class SleepMusicConfigUtility
         Vector3 screenUp;
         float worldW;
         float worldH;
+        float detectedCurveDeg;
         string screenName;
 
-        if (!TryDetectScreenGeometry(targetRoot, ctrl.gameObject, out center, out frontNormal, out screenUp, out worldW, out worldH, out screenName))
+        if (!TryDetectScreenGeometry(targetRoot, ctrl.gameObject, out center, out frontNormal, out screenUp, out worldW, out worldH, out detectedCurveDeg, out screenName))
         {
             Debug.LogWarning("[眠境音乐配置] 未在目标对象「" + targetRoot.name + "」中找到可适配的屏幕（RawImage / MeshRenderer），请手动调整舞台位置与大小。");
             return false;
         }
 
         Undo.RecordObject(stageRootT, "自动适配目标播放器屏幕");
-        // 将音乐舞台严格放在视频画面正前方 2.0mm（绝不产生 Z-Fighting）
-        const float stageForwardOffset = 0.002f;
+        Undo.RecordObject(ctrl, "自动适配目标播放器屏幕与曲率");
+
+        // 按真实屏幕宽高比动态调整 Canvas 画布逻辑尺寸（保持 1:1 等比缩放，避免 21:9 / 32:9 宽屏把正方形封面拉扁）
+        float aspect = worldW / Mathf.Max(0.05f, worldH);
+        float targetCanvasH = 1080f;
+        float targetCanvasW = Mathf.Clamp(Mathf.Round(targetCanvasH * aspect), 1200f, 3840f);
+        if (stageRect != null)
+        {
+            stageRect.sizeDelta = new Vector2(targetCanvasW, targetCanvasH);
+            refW = targetCanvasW;
+            refH = targetCanvasH;
+        }
+        // 确保 musicStageRoot（若为 Canvas 子节点）完全撑满 Canvas，不残留固定 1600x900 尺寸
+        if (ctrl.musicStageRoot != null && ctrl.musicStageRoot.transform != stageRootT)
+        {
+            RectTransform mRt = ctrl.musicStageRoot.GetComponent<RectTransform>();
+            if (mRt != null)
+            {
+                Undo.RecordObject(mRt, "撑满自适应舞台容器");
+                mRt.anchorMin = Vector2.zero;
+                mRt.anchorMax = Vector2.one;
+                mRt.pivot = new Vector2(0.5f, 0.5f);
+                mRt.anchoredPosition = Vector2.zero;
+                mRt.sizeDelta = Vector2.zero;
+            }
+        }
+
+        // 将音乐舞台严格放在视频画面正前方 2.0mm（曲面屏自动留出 4.0mm 安全间隙防穿模）
+        float stageForwardOffset = Mathf.Abs(detectedCurveDeg) > 1f ? 0.004f : 0.002f;
         stageRootT.position = center + frontNormal * stageForwardOffset;
         // Unity UI Canvas 正面朝向 -transform.forward，因此 LookRotation(-frontNormal, screenUp) 确保正面永远朝向观众
         stageRootT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
 
-        // 计算目标世界缩放并抵消父级缩放（含负缩放），确保绝不镜像反转
-        Vector3 parentLossy = stageRootT.parent != null ? stageRootT.parent.lossyScale : Vector3.one;
-        float sx = (worldW / refW) / (Mathf.Abs(parentLossy.x) > 1e-5f ? parentLossy.x : 1f);
-        float sy = (worldH / refH) / (Mathf.Abs(parentLossy.y) > 1e-5f ? parentLossy.y : 1f);
-        float sz = 0.001f / (Mathf.Abs(parentLossy.z) > 1e-5f ? parentLossy.z : 1f);
-        stageRootT.localScale = new Vector3(sx, sy, sz);
+        // 精确按各轴世界缩放换算 localScale（即使父节点存在非等比缩放或旋转也能 100% 严丝合缝贴合曲面弧长与高度）
+        float desiredWorldX = worldW / refW;
+        float desiredWorldY = worldH / refH;
+        float desiredWorldZ = desiredWorldY;
+        if (stageRootT.parent != null)
+        {
+            Transform p = stageRootT.parent;
+            Vector3 pRight = p.InverseTransformVector(stageRootT.right);
+            Vector3 pUp = p.InverseTransformVector(stageRootT.up);
+            Vector3 pFwd = p.InverseTransformVector(stageRootT.forward);
+            float sx = desiredWorldX * pRight.magnitude;
+            float sy = desiredWorldY * pUp.magnitude;
+            float sz = desiredWorldZ * pFwd.magnitude;
+            // 若父节点含奇数次负缩放导致镜像，通过 X 轴符号修正
+            Vector3 pl = p.lossyScale;
+            if ((pl.x * pl.y * pl.z) < 0f) sx = -sx;
+            stageRootT.localScale = new Vector3(sx, sy, sz);
+        }
+        else
+        {
+            stageRootT.localScale = new Vector3(desiredWorldX, desiredWorldY, desiredWorldZ);
+        }
 
         // 自动识别场景内播放器的控制主线（开始/暂停/进度条/输入框 Canvas），自动前移至舞台前方 +5mm 并提高层级
         int shiftedControls = EnsureControlsInFrontOfStage(stageCanvas, targetRoot, ctrl.gameObject, center, frontNormal, stageForwardOffset);
 
+        // 同步识别到的曲面屏弧度，并在确定 stageCanvas.sortingOrder 后刷新排版与曲面细分网格排序
+        ctrl.screenCurveDegrees = Mathf.Clamp(Mathf.Round(detectedCurveDeg * 10f) * 0.1f, -90f, 90f);
+        EnsureCurvedAssetsAndLayout(ctrl);
+
+        // 若存在弹幕叠加层（如挂在 MeshRenderer 屏幕下无 Canvas 或未激活），自动补齐 WorldSpace Canvas 并对齐到屏幕前方 +3mm
+        FitDanmakuOverlayToScreen(ctrl, stageCanvas, center, frontNormal, screenUp, worldW, worldH, targetCanvasW, targetCanvasH, stageForwardOffset);
+
         EditorUtility.SetDirty(stageRootT);
+        EditorUtility.SetDirty(ctrl);
         Debug.Log("[眠境音乐配置] 屏幕自动适配完成 | 命中屏幕: " + screenName +
-                  " | 尺寸: " + worldW.ToString("F2") + "m x " + worldH.ToString("F2") + "m" +
-                  " | 舞台前移: 2.0mm | 已自动前移控制栏 Canvas: " + shiftedControls + " 个（位于舞台前方 5.0mm）");
+                  " | 物理尺寸: " + worldW.ToString("F2") + "m x " + worldH.ToString("F2") + "m" +
+                  " | 画布: " + targetCanvasW.ToString("F0") + "x" + targetCanvasH.ToString("F0") +
+                  " | 曲率: " + ctrl.screenCurveDegrees.ToString("F1") + "°" +
+                  " | 已自动前移控制栏 Canvas: " + shiftedControls + " 个");
         return true;
+    }
+
+    /// <summary>
+    /// 确保曲面文字材质与 32 列细分曲面网格已就绪，并立即刷新全屏自适应排版与曲率预览。
+    /// </summary>
+    public static void EnsureCurvedAssetsAndLayout(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null) return;
+
+        // 1) 自动绑定曲面文字材质（副歌词 / 歌名 / 歌手 / 翻译 / 中线）
+        if (ctrl.curvedTextMat == null)
+        {
+            const string pkgMatPath = "Packages/com.miaobai.sleep-music-player/Materials/Mat_CurvedUIText.mat";
+            Material mat = AssetDatabase.LoadAssetAtPath<Material>(pkgMatPath);
+            if (mat == null)
+            {
+                Shader sh = Shader.Find("SleepSanctuary/GPU/CurvedUIText");
+                if (sh != null)
+                {
+                    mat = new Material(sh);
+                    string saveDir = AssetDatabase.IsValidFolder("Packages/com.miaobai.sleep-music-player/Materials")
+                        ? "Packages/com.miaobai.sleep-music-player/Materials"
+                        : "Assets/SleepMusicCurved";
+                    if (saveDir == "Assets/SleepMusicCurved" && !AssetDatabase.IsValidFolder(saveDir))
+                        AssetDatabase.CreateFolder("Assets", "SleepMusicCurved");
+                    string savePath = saveDir + "/Mat_CurvedUIText.mat";
+                    try
+                    {
+                        AssetDatabase.CreateAsset(mat, savePath);
+                        AssetDatabase.SaveAssets();
+                        mat = AssetDatabase.LoadAssetAtPath<Material>(savePath);
+                    }
+                    catch
+                    {
+                        if (!AssetDatabase.IsValidFolder("Assets/SleepMusicCurved"))
+                            AssetDatabase.CreateFolder("Assets", "SleepMusicCurved");
+                        AssetDatabase.CreateAsset(mat, "Assets/SleepMusicCurved/Mat_CurvedUIText.mat");
+                        AssetDatabase.SaveAssets();
+                        mat = AssetDatabase.LoadAssetAtPath<Material>("Assets/SleepMusicCurved/Mat_CurvedUIText.mat");
+                    }
+                }
+            }
+            if (mat != null) ctrl.curvedTextMat = mat;
+        }
+
+        // 2) 当启用曲面屏时，自动为背景与封面准备 32 列细分网格（替代 4 顶点 RawImage，避免曲面折平）
+        if (ctrl.musicStageRoot != null && (Mathf.Abs(ctrl.screenCurveDegrees) > 0.25f || ctrl.curvedBackdropRenderer != null || ctrl.curvedCoverRenderer != null))
+        {
+            Mesh subdivMesh = GetOrCreateSubdividedQuadMesh();
+            if (subdivMesh != null)
+            {
+                Transform rootT = ctrl.musicStageRoot.transform;
+                if (ctrl.flatBackdropImage == null)
+                {
+                    Transform bgT = rootT.Find("GPU_AmbientBackdrop");
+                    if (bgT != null) ctrl.flatBackdropImage = bgT.GetComponent<RawImage>();
+                }
+                if (ctrl.flatCoverImage == null && ctrl.coverCardRect != null)
+                {
+                    ctrl.flatCoverImage = ctrl.coverCardRect.GetComponent<RawImage>();
+                }
+                if (ctrl.curvedBackdropRenderer == null)
+                {
+                    ctrl.curvedBackdropRenderer = CreateOrFindCurvedMeshChild(rootT, "GPU_CurvedBackdropMesh", subdivMesh, ctrl.ambientBackdropMat, 0);
+                }
+                if (ctrl.curvedCoverRenderer == null)
+                {
+                    ctrl.curvedCoverRenderer = CreateOrFindCurvedMeshChild(rootT, "GPU_CurvedCoverMesh", subdivMesh, ctrl.albumCardMat, 1);
+                }
+            }
+        }
+
+        Canvas.ForceUpdateCanvases();
+        ctrl.ApplyResponsiveLayout();
+        if (ctrl.musicStageRoot != null)
+        {
+            LayoutRebuilder.ForceRebuildLayoutImmediate(ctrl.musicStageRoot.GetComponent<RectTransform>());
+        }
+        Canvas.ForceUpdateCanvases();
+        EditorUtility.SetDirty(ctrl);
+        SceneView.RepaintAll();
+    }
+
+    private static MeshRenderer CreateOrFindCurvedMeshChild(Transform parent, string childName, Mesh mesh, Material mat, int siblingIndex)
+    {
+        Transform existing = parent.Find(childName);
+        GameObject go = existing != null ? existing.gameObject : new GameObject(childName);
+        if (existing == null)
+        {
+            Undo.RegisterCreatedObjectUndo(go, "创建曲面屏细分网格 " + childName);
+            go.transform.SetParent(parent, false);
+            go.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.childCount - 1));
+        }
+        go.layer = parent.gameObject.layer;
+        go.transform.localPosition = Vector3.zero;
+        go.transform.localRotation = Quaternion.identity;
+        go.transform.localScale = Vector3.one;
+
+        MeshFilter mf = go.GetComponent<MeshFilter>();
+        if (mf == null) mf = go.AddComponent<MeshFilter>();
+        mf.sharedMesh = mesh;
+
+        MeshRenderer mr = go.GetComponent<MeshRenderer>();
+        if (mr == null) mr = go.AddComponent<MeshRenderer>();
+        if (mat != null) mr.sharedMaterial = mat;
+        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        mr.receiveShadows = false;
+        mr.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        mr.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        return mr;
+    }
+
+    private static Mesh GetOrCreateSubdividedQuadMesh()
+    {
+        const string pkgMeshPath = "Packages/com.miaobai.sleep-music-player/Materials/QuadSubdiv32.asset";
+        Mesh existing = AssetDatabase.LoadAssetAtPath<Mesh>(pkgMeshPath);
+        if (existing != null) return existing;
+
+        const string fallbackPath = "Assets/SleepMusicCurved/QuadSubdiv32.asset";
+        existing = AssetDatabase.LoadAssetAtPath<Mesh>(fallbackPath);
+        if (existing != null) return existing;
+
+        const int cols = 32;
+        Vector3[] verts = new Vector3[(cols + 1) * 2];
+        Vector2[] uvs = new Vector2[(cols + 1) * 2];
+        int[] tris = new int[cols * 6];
+
+        for (int i = 0; i <= cols; i++)
+        {
+            float u = (float)i / cols;
+            float x = u - 0.5f;
+            verts[i * 2] = new Vector3(x, -0.5f, 0f);
+            verts[i * 2 + 1] = new Vector3(x, 0.5f, 0f);
+            uvs[i * 2] = new Vector2(u, 0f);
+            uvs[i * 2 + 1] = new Vector2(u, 1f);
+        }
+        for (int i = 0; i < cols; i++)
+        {
+            int v = i * 2;
+            int t = i * 6;
+            tris[t] = v;
+            tris[t + 1] = v + 1;
+            tris[t + 2] = v + 2;
+            tris[t + 3] = v + 2;
+            tris[t + 4] = v + 1;
+            tris[t + 5] = v + 3;
+        }
+
+        Mesh mesh = new Mesh { name = "QuadSubdiv32" };
+        mesh.vertices = verts;
+        mesh.uv = uvs;
+        mesh.triangles = tris;
+        mesh.RecalculateNormals();
+        // 扩大包围盒，确保 GPU 顶点弯曲偏移后绝不被视锥剔除
+        mesh.bounds = new Bounds(Vector3.zero, new Vector3(4500f, 2200f, 2200f));
+
+        try
+        {
+            if (AssetDatabase.IsValidFolder("Packages/com.miaobai.sleep-music-player/Materials"))
+            {
+                AssetDatabase.CreateAsset(mesh, pkgMeshPath);
+                AssetDatabase.SaveAssets();
+                return AssetDatabase.LoadAssetAtPath<Mesh>(pkgMeshPath);
+            }
+        }
+        catch { }
+
+        if (!AssetDatabase.IsValidFolder("Assets/SleepMusicCurved"))
+            AssetDatabase.CreateFolder("Assets", "SleepMusicCurved");
+        AssetDatabase.CreateAsset(mesh, fallbackPath);
+        AssetDatabase.SaveAssets();
+        return AssetDatabase.LoadAssetAtPath<Mesh>(fallbackPath);
+    }
+
+    /// <summary>
+    /// 确保弹幕叠加层拥有有效的 WorldSpace Canvas、处于激活状态并精准贴合目标屏幕前方 +3mm（适配平面与曲面屏）。
+    /// </summary>
+    public static void FitDanmakuOverlayToScreen(
+        SleepMusicLyricsController ctrl, Canvas stageCanvas,
+        Vector3 center, Vector3 frontNormal, Vector3 screenUp,
+        float worldW, float worldH, float canvasW, float canvasH, float stageOffset)
+    {
+        if (ctrl == null || ctrl.danmakuOverlay == null) return;
+        SleepDanmakuOverlay dm = ctrl.danmakuOverlay;
+        Transform dmT = dm.transform;
+        Undo.RecordObject(dm.gameObject, "自动配置弹幕叠加层画布与激活状态");
+        Undo.RecordObject(dmT, "自动对齐弹幕叠加层到屏幕");
+
+        if (!dm.gameObject.activeSelf) dm.gameObject.SetActive(true);
+        if (dm.overlayRoot == null) dm.overlayRoot = dm.gameObject;
+        if (dm.danmakuGpuMaterial == null)
+        {
+            Material dmMat = AssetDatabase.LoadAssetAtPath<Material>("Packages/com.miaobai.sleep-music-player/Materials/Mat_DanmakuGPU.mat");
+            if (dmMat == null) dmMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/Materials/Mat_DanmakuGPU.mat");
+            if (dmMat != null) dm.danmakuGpuMaterial = dmMat;
+        }
+
+        Canvas dmCanvas = dm.GetComponentInParent<Canvas>(true);
+        if (dmCanvas == null)
+        {
+            dmCanvas = Undo.AddComponent<Canvas>(dm.gameObject);
+            dmCanvas.renderMode = RenderMode.WorldSpace;
+        }
+
+        RectTransform dmRt = dmT as RectTransform;
+        bool hasOwnCanvas = dmCanvas.gameObject == dm.gameObject;
+        if (hasOwnCanvas)
+        {
+            dmCanvas.renderMode = RenderMode.WorldSpace;
+            dmCanvas.overrideSorting = true;
+            dmCanvas.sortingOrder = stageCanvas != null ? (stageCanvas.sortingOrder + 1) : 1;
+
+            dmT.position = center + frontNormal * (stageOffset + 0.001f);
+            dmT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
+
+            if (dmRt != null)
+            {
+                dmRt.anchorMin = new Vector2(0.5f, 0.5f);
+                dmRt.anchorMax = new Vector2(0.5f, 0.5f);
+                dmRt.pivot = new Vector2(0.5f, 0.5f);
+                dmRt.sizeDelta = new Vector2(canvasW, canvasH);
+            }
+
+            float desiredX = worldW / Mathf.Max(100f, canvasW);
+            float desiredY = worldH / Mathf.Max(100f, canvasH);
+            if (dmT.parent != null)
+            {
+                Transform p = dmT.parent;
+                float sx = desiredX * p.InverseTransformVector(dmT.right).magnitude;
+                float sy = desiredY * p.InverseTransformVector(dmT.up).magnitude;
+                float sz = desiredY * p.InverseTransformVector(dmT.forward).magnitude;
+                Vector3 pl = p.lossyScale;
+                if ((pl.x * pl.y * pl.z) < 0f) sx = -sx;
+                dmT.localScale = new Vector3(sx, sy, sz);
+            }
+            else
+            {
+                dmT.localScale = new Vector3(desiredX, desiredY, desiredY);
+            }
+        }
+        else if (dmRt != null)
+        {
+            dmRt.anchorMin = Vector2.zero;
+            dmRt.anchorMax = Vector2.one;
+            dmRt.pivot = new Vector2(0.5f, 0.5f);
+            dmRt.anchoredPosition = Vector2.zero;
+            dmRt.sizeDelta = Vector2.zero;
+        }
+
+        dm.RefreshCanvasBounds();
+        dm.ApplyScreenCurvature(ctrl.screenCurveDegrees, canvasW);
+        UdonSharpEditorUtility.CopyProxyToUdon(dm);
+        EditorUtility.SetDirty(dm.gameObject);
+        EditorUtility.SetDirty(dm);
     }
 
     // 自动识别播放器控制栏 Canvas（如 VVMW 的 MainUI / Control Panel Root），若离屏幕太近（<4.5mm）则自动前移至 +5.0mm，
@@ -305,19 +621,20 @@ public static class SleepMusicConfigUtility
     private static bool TryDetectScreenGeometry(
         GameObject targetRoot, GameObject ignoreSubtree,
         out Vector3 center, out Vector3 frontNormal, out Vector3 screenUp,
-        out float worldW, out float worldH, out string screenName)
+        out float worldW, out float worldH, out float detectedCurveDegrees, out string screenName)
     {
         center = Vector3.zero;
         frontNormal = -Vector3.forward;
         screenUp = Vector3.up;
         worldW = 0f;
         worldH = 0f;
+        detectedCurveDegrees = 0f;
         screenName = "";
 
         float bestScore = -1f;
         Vector3[] corners = new Vector3[4];
 
-        // 1) 优先查找面积最大的 RawImage 屏幕（VizVid / YamaPlayer / ProTV Canvas 屏幕）
+        // 1) 查找面积最大的 RawImage 屏幕（VizVid / YamaPlayer / ProTV Canvas 屏幕）
         RawImage[] rawImages = targetRoot.GetComponentsInChildren<RawImage>(true);
         for (int i = 0; i < rawImages.Length; i++)
         {
@@ -339,11 +656,12 @@ public static class SleepMusicConfigUtility
                 screenUp = upVec.normalized;
                 worldW = w;
                 worldH = h;
+                detectedCurveDegrees = 0f;
                 screenName = img.name + " (RawImage)";
             }
         }
 
-        // 2) 查找 3D 屏幕 MeshRenderer（Quad / Plane / 自定义显示器网格）
+        // 2) 查找 3D 屏幕 MeshRenderer（支持平面 Quad/Plane 以及任意弧度的曲面屏网格）
         MeshRenderer[] renderers = targetRoot.GetComponentsInChildren<MeshRenderer>(true);
         for (int i = 0; i < renderers.Length; i++)
         {
@@ -358,31 +676,55 @@ public static class SleepMusicConfigUtility
             float sy = Mathf.Abs(localB.size.y * lossy.y);
             float sz = Mathf.Abs(localB.size.z * lossy.z);
 
-            // 判断最薄的轴作为屏幕法线轴（Quad 为 Z 轴最薄，Plane 为 Y 轴最薄），过滤掉厚度 > 0.08m 的非平面 3D 物体/触发盒
+            // 判断最薄轴为法线轴（支持带弧度的曲面屏，其厚度可达宽度的 42%）
             float w, h, thickness;
-            Vector3 localNormal, localUp;
+            Vector3 localRight, localUp, localNormal;
             if (sz <= sx && sz <= sy)
             {
                 w = sx; h = sy; thickness = sz;
-                localNormal = -Vector3.forward;
+                localRight = Vector3.right;
                 localUp = Vector3.up;
+                localNormal = -Vector3.forward;
             }
             else if (sy <= sx && sy <= sz)
             {
                 w = sx; h = sz; thickness = sy;
-                localNormal = Vector3.up;
+                localRight = Vector3.right;
                 localUp = Vector3.forward;
+                localNormal = Vector3.up;
             }
             else
             {
                 w = sz; h = sy; thickness = sx;
-                localNormal = Vector3.right;
+                localRight = Vector3.forward;
                 localUp = Vector3.up;
+                localNormal = Vector3.right;
             }
 
-            if (thickness > 0.08f || w < 0.25f || h < 0.15f) continue;
-            float aspect = w / Mathf.Max(0.01f, h);
-            float aspectWeight = (aspect >= 1.2f && aspect <= 2.4f) ? 1.8f : 0.7f;
+            if (w < 0.25f || h < 0.15f) continue;
+
+            bool flippedHandedness = (lossy.x * lossy.y * lossy.z) < 0f;
+            Vector3 worldNormal = mr.transform.TransformDirection(localNormal).normalized;
+            if (flippedHandedness) worldNormal = -worldNormal;
+            Vector3 worldRight = mr.transform.TransformDirection(localRight).normalized;
+            Vector3 worldUp = mr.transform.TransformDirection(localUp).normalized;
+
+            float curveDeg = 0f;
+            float arcWidth = w;
+            Vector3 candCenter = mr.transform.TransformPoint(localB.center);
+
+            // 若网格有一定厚度，检测其顶点是否构成对称水平圆弧（曲面屏自动识别）
+            if (thickness > 0.015f)
+            {
+                if (thickness > w * 0.45f) continue;
+                bool isCurvedScreen = TryAnalyzeCurvedMesh(
+                    mf.sharedMesh, mr.transform, worldRight, worldNormal, w,
+                    out curveDeg, out arcWidth, out candCenter);
+                if (!isCurvedScreen && thickness > 0.08f) continue;
+            }
+
+            float aspect = arcWidth / Mathf.Max(0.01f, h);
+            float aspectWeight = (aspect >= 1.15f && aspect <= 3.8f) ? 1.8f : 0.7f;
             float shaderWeight = 1.0f;
             if (mr.sharedMaterial != null && mr.sharedMaterial.shader != null)
             {
@@ -390,23 +732,101 @@ public static class SleepMusicConfigUtility
                 if (sh.Contains("video") || sh.Contains("screen") || sh.Contains("vvmw") || sh.Contains("tv") || sh.Contains("avpro"))
                     shaderWeight = 3.0f;
             }
-            float score = w * h * NameScreenWeight(mr.name) * aspectWeight * shaderWeight;
+            float score = arcWidth * h * NameScreenWeight(mr.name) * aspectWeight * shaderWeight;
             if (score > bestScore)
             {
                 bestScore = score;
-                center = mr.transform.TransformPoint(localB.center);
-                bool flippedHandedness = (lossy.x * lossy.y * lossy.z) < 0f;
-                Vector3 n = mr.transform.TransformDirection(localNormal).normalized;
-                if (flippedHandedness) n = -n;
-                frontNormal = n;
-                screenUp = mr.transform.TransformDirection(localUp).normalized;
-                worldW = w;
+                center = candCenter;
+                frontNormal = worldNormal;
+                screenUp = worldUp;
+                worldW = arcWidth;
                 worldH = h;
-                screenName = mr.name + " (MeshRenderer)";
+                detectedCurveDegrees = curveDeg;
+                screenName = mr.name + (Mathf.Abs(curveDeg) > 1f ? " (曲面屏 " + curveDeg.ToString("F0") + "°)" : " (MeshRenderer)");
             }
         }
 
         return bestScore > 0f;
+    }
+
+    // 采样网格顶点判断是否为水平圆弧曲面屏，精确反推弧度 θ = 4*atan(2s/c)、真实弧长与曲面顶点中心
+    private static bool TryAnalyzeCurvedMesh(
+        Mesh mesh, Transform t, Vector3 worldRight, Vector3 worldNormal, float chordHint,
+        out float curveDegrees, out float arcWidth, out Vector3 apexCenter)
+    {
+        curveDegrees = 0f;
+        arcWidth = chordHint;
+        apexCenter = t.TransformPoint(mesh.bounds.center);
+
+        if (mesh == null || !mesh.isReadable || mesh.vertexCount < 6) return false;
+        Vector3[] verts = mesh.vertices;
+        Vector3 origin = t.TransformPoint(mesh.bounds.center);
+
+        float minX = float.MaxValue;
+        float maxX = float.MinValue;
+        float[] px = new float[verts.Length];
+        float[] pz = new float[verts.Length];
+        for (int i = 0; i < verts.Length; i++)
+        {
+            Vector3 wp = t.TransformPoint(verts[i]) - origin;
+            float x = Vector3.Dot(wp, worldRight);
+            float z = Vector3.Dot(wp, worldNormal);
+            px[i] = x;
+            pz[i] = z;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+        }
+
+        float chord = maxX - minX;
+        if (chord < 0.2f) return false;
+        float midX = (minX + maxX) * 0.5f;
+        // 仅采样最左/最右端点（2.5% 带宽）与正中顶点（3.5% 带宽），避免大带宽平均导致矢高被低估、弧度偏小
+        float edgeBand = chord * 0.025f;
+        float midBand = chord * 0.04f;
+
+        float sumLeft = 0f, sumMid = 0f, sumRight = 0f;
+        int cntLeft = 0, cntMid = 0, cntRight = 0;
+        for (int i = 0; i < verts.Length; i++)
+        {
+            if (px[i] <= minX + edgeBand) { sumLeft += pz[i]; cntLeft++; }
+            else if (px[i] >= maxX - edgeBand) { sumRight += pz[i]; cntRight++; }
+            if (Mathf.Abs(px[i] - midX) <= midBand) { sumMid += pz[i]; cntMid++; }
+        }
+        // 若细分较少导致中点带宽未命中，退化为取最接近 midX 的前若干顶点
+        if (cntMid == 0)
+        {
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < verts.Length; i++)
+            {
+                float d = Mathf.Abs(px[i] - midX);
+                if (d < bestDist) { bestDist = d; sumMid = pz[i]; cntMid = 1; }
+            }
+        }
+        if (cntLeft == 0 || cntMid == 0 || cntRight == 0) return false;
+
+        float zLeft = sumLeft / cntLeft;
+        float zRight = sumRight / cntRight;
+        float zMid = sumMid / cntMid;
+        float zEdge = (zLeft + zRight) * 0.5f;
+        // signedSagitta > 0 表示两侧比中心更靠近观众（内凹环绕曲面屏）
+        float signedSagitta = zEdge - zMid;
+        float absSagitta = Mathf.Abs(signedSagitta);
+
+        if (absSagitta < chord * 0.015f) return false;
+        if (Mathf.Abs(zLeft - zRight) > Mathf.Max(0.03f, absSagitta * 0.35f)) return false;
+
+        // 精确圆弧公式：θ = 4 * atan(2 * s / c)
+        float thetaRad = 4f * Mathf.Atan((2f * absSagitta) / chord);
+        float deg = thetaRad * Mathf.Rad2Deg;
+        if (deg < 3f || deg > 120f) return false;
+
+        float halfTheta = thetaRad * 0.5f;
+        float radius = (chord * 0.5f) / Mathf.Max(0.001f, Mathf.Sin(halfTheta));
+        arcWidth = radius * thetaRad;
+        curveDegrees = signedSagitta >= 0f ? deg : -deg;
+        // 将舞台锚点精准放在曲面中心顶点表面上
+        apexCenter = origin + worldNormal * zMid;
+        return true;
     }
 
     private static float NameScreenWeight(string name)
@@ -697,10 +1117,34 @@ public static class SleepMusicConfigUtility
             }
             EnsureInputPrefixInitialized(ctrl);
         }
-        if (ctrl.stageOnlyMode && playerRoot != null)
+        // 3.5) 自动绑定场景中的弹幕叠加层
+        if (ctrl.danmakuOverlay == null)
         {
-            // 纯舞台模式：自动适配目标播放器屏幕尺寸并将音乐图层置于控制栏之后
-            AutoFitToTargetScreen(ctrl, playerRoot);
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null && playerRoot != null) ctrl.danmakuOverlay = playerRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+
+        // 3.5) 自动绑定场景中的弹幕叠加层
+        if (ctrl.danmakuOverlay == null)
+        {
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null && playerRoot != null) ctrl.danmakuOverlay = playerRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+
+        if (ctrl.stageOnlyMode)
+        {
+            // 纯舞台模式：优先适配播放器子树内的平面/曲面屏幕；若屏幕独立于播放器外则自动全场景识别最大屏幕
+            bool fitted = playerRoot != null && AutoFitToTargetScreen(ctrl, playerRoot);
+            if (!fitted)
+            {
+                AutoFitToBestSceneScreen(ctrl);
+            }
+        }
+        else
+        {
+            EnsureCurvedAssetsAndLayout(ctrl);
         }
 
         SafeCopyProxyToUdon(ctrl);
@@ -712,6 +1156,30 @@ public static class SleepMusicConfigUtility
                   " | 底层 VideoPlayer: " + (ctrl.videoPlayers != null ? ctrl.videoPlayers.Length : 0) + " 个" +
                   " | 输入框: " + (ctrl.urlInputField != null ? ctrl.urlInputField.name : "无") +
                   " | 切歌事件: " + (string.IsNullOrEmpty(ctrl.playerSubmitEvent) ? "直调 PlayURL" : ctrl.playerSubmitEvent));
+    }
+
+    /// <summary>在全场景根物体中自动寻找最像视频屏幕（含曲面屏）的对象并一键适配。</summary>
+    public static bool AutoFitToBestSceneScreen(SleepMusicLyricsController ctrl)
+    {
+        if (ctrl == null || !ctrl.gameObject.scene.IsValid()) return false;
+        GameObject[] roots = ctrl.gameObject.scene.GetRootGameObjects();
+        float bestArea = -1f;
+        GameObject bestRoot = null;
+        for (int i = 0; i < roots.Length; i++)
+        {
+            GameObject r = roots[i];
+            if (r == null || r == ctrl.gameObject || IsChildOf(r.transform, ctrl.transform)) continue;
+            if (TryDetectScreenGeometry(r, ctrl.gameObject, out _, out _, out _, out float w, out float h, out float deg, out _))
+            {
+                float score = w * h * (Mathf.Abs(deg) > 1f ? 1.5f : 1.0f);
+                if (score > bestArea)
+                {
+                    bestArea = score;
+                    bestRoot = r;
+                }
+            }
+        }
+        return bestRoot != null && AutoFitToTargetScreen(ctrl, bestRoot);
     }
 
     /// <summary>安全将 Proxy 同步至底层 UdonBehaviour：同步前自动将跨预制体 UdonSharpBehaviour 迁移为直接 UdonBehaviour 引用，防止 UdonSharpBehaviourSerializer 空引用。</summary>
@@ -875,9 +1343,17 @@ public class SleepMusicLyricsControllerEditor : Editor
         }
         if (GUILayout.Button("自动适配屏幕大小", GUILayout.Width(118), GUILayout.Height(26)))
         {
-            GameObject targetGo = ctrl.playerController != null ? ctrl.playerController.transform.root.gameObject
-                : (ctrl.transform.parent != null ? ctrl.transform.parent.gameObject : null);
-            if (targetGo != null) SleepMusicConfigUtility.AutoFitToTargetScreen(ctrl, targetGo);
+            GameObject targetGo = null;
+            if (ctrl.rawUdonPlayer != null) targetGo = ctrl.rawUdonPlayer.transform.root.gameObject;
+            else if (ctrl.playerController != null) targetGo = ctrl.playerController.transform.root.gameObject;
+            else if (ctrl.videoPlayers != null && ctrl.videoPlayers.Length > 0 && ctrl.videoPlayers[0] != null) targetGo = ctrl.videoPlayers[0].transform.root.gameObject;
+            else if (ctrl.transform.parent != null) targetGo = ctrl.transform.parent.gameObject;
+
+            if (targetGo != null)
+            {
+                SleepMusicConfigUtility.AutoFitToTargetScreen(ctrl, targetGo);
+                SleepMusicConfigUtility.SafeCopyProxyToUdon(ctrl);
+            }
             else EditorUtility.DisplayDialog("未指定目标播放器", "请先将目标播放器拖入上方绑定区，或将本舞台放到播放器物体下。", "确定");
         }
         if (GUILayout.Button("翻转 180°", GUILayout.Width(76), GUILayout.Height(26)))
@@ -885,6 +1361,36 @@ public class SleepMusicLyricsControllerEditor : Editor
             SleepMusicConfigUtility.FlipStageFacing180(ctrl);
         }
         EditorGUILayout.EndHorizontal();
+        EditorGUILayout.Space(4);
+
+        // 实时屏幕自适应与曲面屏调节区（拖动滑条即时在 Scene 视图预览铺满与弯曲效果）
+        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+        EditorGUILayout.LabelField("屏幕自适应与曲面屏调节（实时预览）", EditorStyles.boldLabel);
+        EditorGUI.BeginChangeCheck();
+        float newScale = EditorGUILayout.Slider("整体内容大小", ctrl.contentScale, 0.5f, 1.8f);
+        float newMargin = EditorGUILayout.Slider("左右留白比例", ctrl.horizontalMarginRatio, 0.02f, 0.20f);
+        float newCurve = EditorGUILayout.Slider("曲面屏弧度 (°)", ctrl.screenCurveDegrees, -90f, 90f);
+        bool layoutChanged = EditorGUI.EndChangeCheck();
+
+        EditorGUILayout.BeginHorizontal();
+        if (GUILayout.Button("平面 0°", GUILayout.Height(22))) { newCurve = 0f; layoutChanged = true; }
+        if (GUILayout.Button("轻曲 25°", GUILayout.Height(22))) { newCurve = 25f; layoutChanged = true; }
+        if (GUILayout.Button("环绕 45°", GUILayout.Height(22))) { newCurve = 45f; layoutChanged = true; }
+        if (GUILayout.Button("大曲 65°", GUILayout.Height(22))) { newCurve = 65f; layoutChanged = true; }
+        if (GUILayout.Button("刷新排版", GUILayout.Width(72), GUILayout.Height(22))) { layoutChanged = true; }
+        EditorGUILayout.EndHorizontal();
+
+        if (layoutChanged)
+        {
+            Undo.RecordObject(ctrl, "调整自适应排版与曲面弧度");
+            ctrl.contentScale = newScale;
+            ctrl.horizontalMarginRatio = newMargin;
+            ctrl.screenCurveDegrees = newCurve;
+            SleepMusicConfigUtility.EnsureCurvedAssetsAndLayout(ctrl);
+            SleepMusicConfigUtility.SafeCopyProxyToUdon(ctrl);
+            if (ctrl.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(ctrl.gameObject.scene);
+        }
+        EditorGUILayout.EndVertical();
         EditorGUILayout.Space(2);
 
         EditorGUILayout.BeginHorizontal();

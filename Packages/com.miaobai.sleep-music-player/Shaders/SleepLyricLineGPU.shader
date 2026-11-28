@@ -9,10 +9,12 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
         _IdleColor ("未唱珍珠白", Color) = (0.86, 0.84, 0.80, 0.78)
         _Sweep ("逐字上色进度 (0..1)", Range(0, 1)) = 1.0
         _StartX ("文本左边界 Canvas X (px)", Float) = -162.0
-        _TextWidth ("当前句实际宽度 (px)", Range(40, 900)) = 520.0
+        _TextWidth ("当前句实际宽度 (px)", Range(40, 3200)) = 520.0
         _FlipFade ("切行上浮渐显 (0..1)", Range(0, 1)) = 1.0
         _IsActive ("是否当前高亮句", Range(0, 1)) = 1.0
         _FloatHeight ("逐字上浮高度 (px)", Range(0, 10)) = 5.5
+        _CurveAngle ("曲面屏总弧度 (rad)", Range(-1.58, 1.58)) = 0.0
+        _StageWidth ("舞台画布宽度 (px)", Float) = 1920.0
     }
 
     SubShader
@@ -33,6 +35,7 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
                 float4 vertex : POSITION;
                 float4 color  : COLOR;
                 float2 uv     : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct v2f
@@ -41,6 +44,7 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
                 fixed4 color  : COLOR;
                 float2 uv     : TEXCOORD0;
                 float  localX : TEXCOORD1;
+                UNITY_VERTEX_OUTPUT_STEREO
             };
 
             sampler2D _MainTex;
@@ -53,10 +57,14 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
             float _FlipFade;
             float _IsActive;
             float _FloatHeight;
+            float _CurveAngle;
+            float _StageWidth;
 
             v2f vert(appdata v)
             {
                 v2f o;
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
                 // Unity UI Canvas 网格顶点位于 Canvas 本地坐标系，减去真实左边界 _StartX 后再除以真实字宽
                 float localX = saturate((v.vertex.x - _StartX) / max(_TextWidth, 40.0));
 
@@ -67,6 +75,18 @@ Shader "SleepSanctuary/GPU/LyricLineSweep"
                 float activeWindow = step(0.004, _Sweep) * step(_Sweep, 0.996) * _IsActive;
                 float lift = exp(-pow((localX - _Sweep) * 7.5, 2.0)) * _FloatHeight * activeWindow;
                 p.y += lift;
+
+                // 曲面屏 GPU 顶点弯曲（_CurveAngle = 0 时完全退化为平面）
+                if (abs(_CurveAngle) > 0.001)
+                {
+                    float halfW = max(100.0, _StageWidth * 0.5);
+                    float halfAng = abs(_CurveAngle) * 0.5;
+                    float radius = halfW / max(0.001, halfAng);
+                    float sgn = _CurveAngle >= 0.0 ? 1.0 : -1.0;
+                    float theta = (p.x / halfW) * halfAng;
+                    p.x = radius * sin(theta);
+                    p.z -= sgn * radius * (1.0 - cos(theta));
+                }
 
                 o.pos = UnityObjectToClipPos(float4(p, 1.0));
                 o.uv = v.uv;
