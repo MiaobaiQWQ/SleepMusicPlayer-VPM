@@ -156,7 +156,15 @@ public static class SleepMusicConfigUtility
             EnsureInputPrefixInitialized(ctrl);
         }
 
-        // 4) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
+        // 4) 自动绑定弹幕叠加层（若尚未指定，优先在自身子树、目标播放器子树及全场景查找）
+        if (ctrl.danmakuOverlay == null)
+        {
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = targetRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+
+        // 5) 纯舞台模式下自动适配目标播放器的屏幕尺寸与正面朝向（防镜像/防背面遮挡）
         if (ctrl.stageOnlyMode)
         {
             AutoFitToTargetScreen(ctrl, targetRoot);
@@ -271,6 +279,9 @@ public static class SleepMusicConfigUtility
         // 同步识别到的曲面屏弧度，并在确定 stageCanvas.sortingOrder 后刷新排版与曲面细分网格排序
         ctrl.screenCurveDegrees = Mathf.Clamp(Mathf.Round(detectedCurveDeg * 10f) * 0.1f, -90f, 90f);
         EnsureCurvedAssetsAndLayout(ctrl);
+
+        // 若存在弹幕叠加层（如挂在 MeshRenderer 屏幕下无 Canvas 或未激活），自动补齐 WorldSpace Canvas 并对齐到屏幕前方 +3mm
+        FitDanmakuOverlayToScreen(ctrl, stageCanvas, center, frontNormal, screenUp, worldW, worldH, targetCanvasW, targetCanvasH, stageForwardOffset);
 
         EditorUtility.SetDirty(stageRootT);
         EditorUtility.SetDirty(ctrl);
@@ -452,6 +463,88 @@ public static class SleepMusicConfigUtility
         AssetDatabase.CreateAsset(mesh, fallbackPath);
         AssetDatabase.SaveAssets();
         return AssetDatabase.LoadAssetAtPath<Mesh>(fallbackPath);
+    }
+
+    /// <summary>
+    /// 确保弹幕叠加层拥有有效的 WorldSpace Canvas、处于激活状态并精准贴合目标屏幕前方 +3mm（适配平面与曲面屏）。
+    /// </summary>
+    public static void FitDanmakuOverlayToScreen(
+        SleepMusicLyricsController ctrl, Canvas stageCanvas,
+        Vector3 center, Vector3 frontNormal, Vector3 screenUp,
+        float worldW, float worldH, float canvasW, float canvasH, float stageOffset)
+    {
+        if (ctrl == null || ctrl.danmakuOverlay == null) return;
+        SleepDanmakuOverlay dm = ctrl.danmakuOverlay;
+        Transform dmT = dm.transform;
+        Undo.RecordObject(dm.gameObject, "自动配置弹幕叠加层画布与激活状态");
+        Undo.RecordObject(dmT, "自动对齐弹幕叠加层到屏幕");
+
+        if (!dm.gameObject.activeSelf) dm.gameObject.SetActive(true);
+        if (dm.overlayRoot == null) dm.overlayRoot = dm.gameObject;
+        if (dm.danmakuGpuMaterial == null)
+        {
+            Material dmMat = AssetDatabase.LoadAssetAtPath<Material>("Packages/com.miaobai.sleep-music-player/Materials/Mat_DanmakuGPU.mat");
+            if (dmMat == null) dmMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/Materials/Mat_DanmakuGPU.mat");
+            if (dmMat != null) dm.danmakuGpuMaterial = dmMat;
+        }
+
+        Canvas dmCanvas = dm.GetComponentInParent<Canvas>(true);
+        if (dmCanvas == null)
+        {
+            dmCanvas = Undo.AddComponent<Canvas>(dm.gameObject);
+            dmCanvas.renderMode = RenderMode.WorldSpace;
+        }
+
+        RectTransform dmRt = dmT as RectTransform;
+        bool hasOwnCanvas = dmCanvas.gameObject == dm.gameObject;
+        if (hasOwnCanvas)
+        {
+            dmCanvas.renderMode = RenderMode.WorldSpace;
+            dmCanvas.overrideSorting = true;
+            dmCanvas.sortingOrder = stageCanvas != null ? (stageCanvas.sortingOrder + 1) : 1;
+
+            dmT.position = center + frontNormal * (stageOffset + 0.001f);
+            dmT.rotation = Quaternion.LookRotation(-frontNormal, screenUp);
+
+            if (dmRt != null)
+            {
+                dmRt.anchorMin = new Vector2(0.5f, 0.5f);
+                dmRt.anchorMax = new Vector2(0.5f, 0.5f);
+                dmRt.pivot = new Vector2(0.5f, 0.5f);
+                dmRt.sizeDelta = new Vector2(canvasW, canvasH);
+            }
+
+            float desiredX = worldW / Mathf.Max(100f, canvasW);
+            float desiredY = worldH / Mathf.Max(100f, canvasH);
+            if (dmT.parent != null)
+            {
+                Transform p = dmT.parent;
+                float sx = desiredX * p.InverseTransformVector(dmT.right).magnitude;
+                float sy = desiredY * p.InverseTransformVector(dmT.up).magnitude;
+                float sz = desiredY * p.InverseTransformVector(dmT.forward).magnitude;
+                Vector3 pl = p.lossyScale;
+                if ((pl.x * pl.y * pl.z) < 0f) sx = -sx;
+                dmT.localScale = new Vector3(sx, sy, sz);
+            }
+            else
+            {
+                dmT.localScale = new Vector3(desiredX, desiredY, desiredY);
+            }
+        }
+        else if (dmRt != null)
+        {
+            dmRt.anchorMin = Vector2.zero;
+            dmRt.anchorMax = Vector2.one;
+            dmRt.pivot = new Vector2(0.5f, 0.5f);
+            dmRt.anchoredPosition = Vector2.zero;
+            dmRt.sizeDelta = Vector2.zero;
+        }
+
+        dm.RefreshCanvasBounds();
+        dm.ApplyScreenCurvature(ctrl.screenCurveDegrees, canvasW);
+        UdonSharpEditorUtility.CopyProxyToUdon(dm);
+        EditorUtility.SetDirty(dm.gameObject);
+        EditorUtility.SetDirty(dm);
     }
 
     // 自动识别播放器控制栏 Canvas（如 VVMW 的 MainUI / Control Panel Root），若离屏幕太近（<4.5mm）则自动前移至 +5.0mm，
@@ -1024,6 +1117,26 @@ public static class SleepMusicConfigUtility
             }
             EnsureInputPrefixInitialized(ctrl);
         }
+        // 3.5) 自动绑定场景中的弹幕叠加层
+        if (ctrl.danmakuOverlay == null)
+        {
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null && playerRoot != null) ctrl.danmakuOverlay = playerRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+        else
+        {
+            EnsureCurvedAssetsAndLayout(ctrl);
+        }
+
+        // 3.5) 自动绑定场景中的弹幕叠加层
+        if (ctrl.danmakuOverlay == null)
+        {
+            ctrl.danmakuOverlay = ctrl.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null && playerRoot != null) ctrl.danmakuOverlay = playerRoot.GetComponentInChildren<SleepDanmakuOverlay>(true);
+            if (ctrl.danmakuOverlay == null) ctrl.danmakuOverlay = Object.FindObjectOfType<SleepDanmakuOverlay>(true);
+        }
+
         if (ctrl.stageOnlyMode)
         {
             // 纯舞台模式：优先适配播放器子树内的平面/曲面屏幕；若屏幕独立于播放器外则自动全场景识别最大屏幕
