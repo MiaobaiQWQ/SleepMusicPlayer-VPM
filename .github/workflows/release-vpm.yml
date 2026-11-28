@@ -92,13 +92,15 @@ jobs:
               json.dump(index_data, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
+          edition_label = "最新测试版" if is_prerelease else "最新正式版"
+          release_name = f"SleepMusic Player v{version} (Beta)" if is_prerelease else f"SleepMusic Player v{version}"
           html = f"""<!doctype html>
           <html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
           <title>SleepMusic Player · VPM 镜像源</title>
           <style>body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111318;color:#ece8e1;display:flex;align-items:center;justify-content:center;min-height:100vh}}.card{{max-width:560px;width:90%;background:rgba(28,31,38,.92);border:1px solid rgba(242,184,112,.28);border-radius:20px;padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.5)}}h1{{margin:0 0 8px;font-size:24px;color:#f6cfa0}}p{{color:#b8b3aa;line-height:1.6;font-size:14px}}.btn{{display:inline-block;margin-top:16px;padding:12px 24px;background:#e5a95c;color:#15171c;font-weight:700;text-decoration:none;border-radius:999px}}code{{display:block;margin-top:16px;padding:12px;background:#0b0d11;border-radius:10px;font-size:12px;word-break:break-all;color:#d8d3ca}}</style>
           </head><body><div class="card"><h1>SleepMusic Player · VPM 镜像源</h1>
           <p>支持任意 VRChat 视频播放器的通用 GPU 音乐歌词与弹幕舞台（正式版），内置 GPU BC1 封面解码、无重影流体背景、真逐字歌词、曲面屏自适应与拖拽自动绑定。</p>
-          <p>最新测试版：<b>v{version}</b></p>
+          <p>{edition_label}：<b>v{version}</b></p>
           <a class="btn" href="vcc://vpm/addRepo?url={listing_url}">一键添加到 VCC / ALCOM</a>
           <code>{listing_url}</code></div></body></html>
           """
@@ -107,6 +109,7 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"version={version}\n")
+              out.write(f"release_name={release_name}\n")
               out.write(f"prerelease={'true' if is_prerelease else 'false'}\n")
           PY
 
@@ -114,9 +117,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.pkg.outputs.version }}
-          name: SleepMusic Player v${{ steps.pkg.outputs.version }} (Beta)
+          name: ${{ steps.pkg.outputs.release_name }}
           files: dist/com.miaobai.sleep-music-player-${{ steps.pkg.outputs.version }}.zip
-          prerelease: true
+          prerelease: ${{ steps.pkg.outputs.prerelease }}
           generate_release_notes: true
 
       - name: Commit updated docs/index.json & docs/index.html
